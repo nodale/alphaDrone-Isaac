@@ -14,7 +14,7 @@ launch Interface -> Isaac Utils -> Workflows -> URDF Importer -> scroll down -> 
 
 or using pythons script:
 
-'''python
+```python
 from omni.importer.urdf import _urdf
 
 urdf_interface = _urdf.acquire_urdf_interface()
@@ -40,7 +40,7 @@ UsdPhysics.RigidBodyAPI.Apply(prim)
 UsdPhysics.CollisionAPI.Apply(prim)
 
 
-'''
+```
 
 After importing, do:
 [x] Instancable -> add gravity and collision

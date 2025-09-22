@@ -20,9 +20,16 @@ os.chdir("/home/azapata/JoeysStuffs/alphaDrone-Isaac/URDF_template")
 
 def apply_rotor_forces(rotors):
     for i in range(rotors.count):
+<<<<<<< HEAD
         rotors.apply_forces(
             indices=[i],
             forces=np.array([0, 10, 0]),
+=======
+        rotors.apply_forces_and_torques_at_pos(
+            indices=[i],
+            forces=np.array([0, 8, 0]),
+            torques=np.array([0, 100*(-1)**i, 0]),
+>>>>>>> 1539824 (updated for torques)
             is_global=False
         )
 

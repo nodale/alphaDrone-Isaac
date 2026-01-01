@@ -1,3 +1,5 @@
+import torch as torch
+
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation
 from isaaclab.envs import DirectRLEnv
@@ -5,9 +7,9 @@ from isaaclab.envs import DirectRLEnv
 from baseDrone import Drone
 from baseEnvironment import DroneEnvironment
 
-class QuadcopterEnv(DirectRLEnv):
+class DroneRunner(DirectRLEnv):
     cfg : DroneEnvironment
-    drone : Drone
+    drone : Drone = Drone()
 
     def __init__(self, cfg: DroneEnvironment, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)

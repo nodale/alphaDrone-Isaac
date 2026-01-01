@@ -4,8 +4,7 @@ from isaaclab.utils import configclass
 from isaaclab.actuators import ImplicitActuatorCfg
 
 class Drone():
-    articulation_cfg : ArticulationCfg =
-        ArticulationCfg(
+    articulation_cfg : ArticulationCfg = ArticulationCfg(
                 spawn=sim_utils.UsdFileCfg(usd_path="drone/test9.usda"),
                 prim_path="/World/envs/env_.*/drone",
                 actuators={"rotors": ImplicitActuatorCfg(joint_names_expr=["rotor_[1-4]_joint"], damping=None, stiffness=None)},

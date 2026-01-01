@@ -9,25 +9,25 @@ from isaaclab.sim import SimulationCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 
-class EnvironmentWindow(BaseEnvWindow):
-    def __init__(self, env: QuadcopterEnv, window_name: str = "IsaacLab"):
-        super().__init__(env, window_name)
-        with self.ui_window_elements["main_vstack"]:
-            with self.ui_window_elements["debug_frame"]:
-                with self.ui_window_elements["debug_vstack"]:
-                    self._create_debug_vis_ui_element("targets", self.env)
+#class EnvironmentWindow(BaseEnvWindow):
+#    def __init__(self, env: DroneRunner, window_name: str = "IsaacLab"):
+#        super().__init__(env, window_name)
+#        with self.ui_window_elements["main_vstack"]:
+#            with self.ui_window_elements["debug_frame"]:
+#                with self.ui_window_elements["debug_vstack"]:
+#                    self._create_debug_vis_ui_element("targets", self.env)
 
 
 @configclass
 class DroneEnvironment(DirectRLEnvCfg):
-    max_duration = 120.0
+    episode_length_s = 120.0
     decimation = 1
     action_space = 4
     observation_space = 6
     state_space = 0
     debug_vis = False
 
-    ui_window_class_type = QuadcopterEnvWindow
+#    ui_window_class_type = EnvironmentWindow
 
     sim: SimulationCfg = SimulationCfg(
         dt=1 / 100,

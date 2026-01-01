@@ -142,13 +142,13 @@ class DroneEnv(DirectRLEnv):
         return observations
 
     def _get_rewards(self) -> torch.Tensor:
-    #    distance_to_goal = torch.linalg.norm(self._desired_pos_w - self._drone.data.root_pos_w, dim=1)
-    #    distance_to_goal_mapped = 1 - torch.tanh(distance_to_goal / 0.8)
-    #    rewards = {
-    #            "distance_to_goal": distance_to_goal_mapped * self.step_dt,
-    #            }
-    #    reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
-    #    return reward
+        distance_to_goal = torch.linalg.norm(self._drone.data.root_pos_w, dim=1)
+        distance_to_goal_mapped = 1 - torch.tanh(distance_to_goal / 0.8)
+        rewards = {
+                "distance_to_goal": distance_to_goal_mapped * self.step_dt,
+                }
+        reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
+        return reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         time_out = self.episode_length_buf >= self.max_episode_length - 1

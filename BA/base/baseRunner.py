@@ -31,7 +31,7 @@ class DroneRunner(DirectRLEnv):
 
         self.drone = Drone(self.cfg.num_envs)
         self.scene.articulations["drone"] = self.drone.articulation
-        self.drone.init()
+        self.rotor_id = self.drone.articulation.find_bodies("rotor_[1-4]")
 
     def _pre_physics_step(self, actions: torch.Tensor):
         self._actions = actions.clone()

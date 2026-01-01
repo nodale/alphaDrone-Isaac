@@ -28,7 +28,6 @@ class DroneEnvironment(DirectRLEnvCfg):
     observation_space = 6
     state_space = 0
     debug_vis = False
-    num_envs = 4
 
 #    ui_window_class_type = EnvironmentWindow
 
@@ -65,5 +64,5 @@ class DroneEnvironment(DirectRLEnvCfg):
     )
 
     def __init__(self):
-        self.drone = Drone(4)
+        self.drone = Drone(2)
         self.drone.articulation_cfg.replace(prim_path="/World/envs/env_.*/drone")

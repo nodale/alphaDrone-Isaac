@@ -31,7 +31,7 @@ class DroneEnvironment(DirectRLEnvCfg):
 
 #    ui_window_class_type = EnvironmentWindow
 
-    sim: SimulationCfg = SimulationCfg(
+    sim = SimulationCfg(
         dt=1 / 100,
         render_interval=1,
         physics_material=sim_utils.RigidBodyMaterialCfg(

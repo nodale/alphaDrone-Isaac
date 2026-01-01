@@ -26,6 +26,7 @@ class DroneEnvironment(DirectRLEnvCfg):
     observation_space = 6
     state_space = 0
     debug_vis = False
+    num_envs = 4
 
 #    ui_window_class_type = EnvironmentWindow
 

@@ -26,6 +26,7 @@ class Drone():
         self.articulation = Articulation(self.articulation_cfg)
 
     def init(self):
+        self.drone_mass = self.articulation.root_physx_view.get_masses()[0].sum()
         self.rotor_id = self.articulation.find_bodies("rotor_[1-4]")
 
         

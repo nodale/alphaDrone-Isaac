@@ -80,7 +80,7 @@ class DroneEnvCfg(DirectRLEnvCfg):
         replicate_physics=True
     )
 
-    drone = drone_cfg.replace(prim_path="/World/envs/env_.*/drone")
+    drone = Drone.drone_cfg.replace(prim_path="/World/envs/env_.*/drone")
 
     reward_alive_scale = 1.0
 

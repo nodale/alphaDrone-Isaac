@@ -127,13 +127,14 @@ class DroneEnv(DirectRLEnv):
     #    print(self._thrust)
     #    print("\n")
 
-    #def _apply_action(self):
-    #    self._drone.set_external_force_and_torque(
-    #            self.thrust, 
-    #            self.moment,
-    #            body_ids=self._body_id[0], 
-    #            is_global=False
-    #            )
+    def _apply_action(self):
+    #   self._drone.set_external_force_and_torque(
+    #           self.thrust, 
+    #           self.moment,
+    #           body_ids=self._body_id[0], 
+    #           is_global=False
+    #           )
+        print("AAAAAAAAAA")
 
     def _get_observations(self) -> dict:
         self.observedPosition = self._drone.data.root_link_pos_w

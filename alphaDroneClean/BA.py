@@ -92,7 +92,7 @@ class DroneEnvCfg(DirectRLEnvCfg):
 
 class DroneEnv(DirectRLEnv):
     cfg: DroneEnvCfg
-    drone = Drone.drone_cfg.replace(prim_path="/World/envs/env_.*/drone")
+    drone = Drone()
 
     def __init__(self, cfg: DroneEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
@@ -101,7 +101,8 @@ class DroneEnv(DirectRLEnv):
         #self.set_debug_vis(self.cfg.debug_vis)
 
     def _setup_scene(self):
-        self._drone = Articulation(self.drone)
+        self.drone.drone_cfg.replace(prim_path="/World/envs/env_.*/drone")
+        self._drone = Articulation(self.drone.drone_cfg)
         self.scene.articulations["drone"] = self._drone
 
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs

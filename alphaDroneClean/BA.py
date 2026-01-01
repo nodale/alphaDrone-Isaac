@@ -27,8 +27,15 @@ class Drone():
             init_state=ArticulationCfg.InitialStateCfg(pos=[0.0, 0.0, 0.2])
             )   
 
-class DroneEnvWindow(BaseEnvWindow):
+    def __init__(self, num_envs, device="cpu"):
+        self.thrust = torch.zeros(num_envs, 4, 3, device=device)
+        self.moment = torch.zeros(num_envs, 4, 3, device=device)
 
+        self.setpoint = torch.zeros(num_envs, 3, device=device)
+
+        self.body_id = self._drone.find_bodies("rotor_[1-4]")
+
+class DroneEnvWindow(BaseEnvWindow):
     def __init__(self, env: DroneEnv, window_name: str = "IsaacLab"):
         super().__init__(env, window_name)
         with self.ui_window_elements["main_vstack"]:
@@ -80,34 +87,21 @@ class DroneEnvCfg(DirectRLEnvCfg):
         replicate_physics=True
     )
 
-    drone = Drone.drone_cfg.replace(prim_path="/World/envs/env_.*/drone")
-
     reward_alive_scale = 1.0
 
 
 class DroneEnv(DirectRLEnv):
     cfg: DroneEnvCfg
+    drone = Drone.drone_cfg.replace(prim_path="/World/envs/env_.*/drone")
 
     def __init__(self, cfg: DroneEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
 
-        self.dof_idx = self._drone.find_joints(name_keys=["rotor_[1-4]_joint"])
-
-        self._thrust = torch.zeros(self.num_envs, len(self.dof_idx[0]), 3, device=self.device)
-        self._moment = torch.zeros(self.num_envs, len(self.dof_idx[0]), 3, device=self.device)
-
-        self._desired_pos_w = torch.zeros(self.num_envs, 3, device=self.device)
-        self._desired_pos_w[:, 2] = 4.0
-
-        self._body_id = self._drone.find_bodies("rotor_[1-4]")
-        self._drone_mass = self._drone.root_physx_view.get_masses()[0].sum()
-        self._gravity_magnitude = torch.tensor(self.sim.cfg.gravity, device=self.device).norm()
-        self._drone_weight = (self._drone_mass * self._gravity_magnitude).item()
 
         #self.set_debug_vis(self.cfg.debug_vis)
 
     def _setup_scene(self):
-        self._drone = Articulation(self.cfg.drone)
+        self._drone = Articulation(self.drone)
         self.scene.articulations["drone"] = self._drone
 
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
@@ -126,19 +120,19 @@ class DroneEnv(DirectRLEnv):
     def _pre_physics_step(self, actions: torch.Tensor):
         self._actions = actions.clone()
 
-        self._thrust[:, :, 1] = self._actions[:, :]
-        self._moment = self._thrust * 10.0
+        self.drone.thrust[:, :, 1] = self._actions[:, :]
+        self.drone.moment = self._thrust * 10.0
 
-        self._moment[:, 1, 1] *= -1
-        self._moment[:, 3, 1] *= -1
+        self.drone.moment[:, 1, 1] *= -1
+        self.drone.moment[:, 3, 1] *= -1
 
         print(self._thrust)
         print("\n")
 
     def _apply_action(self):
         self._drone.set_external_force_and_torque(
-                self._thrust, 
-                self._moment,
+                self.drone.thrust, 
+                self.drone.moment,
                 body_ids=self._body_id[0], 
                 is_global=False
                 )
@@ -148,14 +142,14 @@ class DroneEnv(DirectRLEnv):
         observations = {"policy": self.observedPosition}
         return observations
 
-    def _get_rewards(self) -> torch.Tensor:
-        distance_to_goal = torch.linalg.norm(self._desired_pos_w - self._drone.data.root_pos_w, dim=1)
-        distance_to_goal_mapped = 1 - torch.tanh(distance_to_goal / 0.8)
-        rewards = {
-                "distance_to_goal": distance_to_goal_mapped * self.step_dt,
-                }
-        reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
-        return reward
+    #def _get_rewards(self) -> torch.Tensor:
+    #    distance_to_goal = torch.linalg.norm(self._desired_pos_w - self._drone.data.root_pos_w, dim=1)
+    #    distance_to_goal_mapped = 1 - torch.tanh(distance_to_goal / 0.8)
+    #    rewards = {
+    #            "distance_to_goal": distance_to_goal_mapped * self.step_dt,
+    #            }
+    #    reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
+    #    return reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         time_out = self.episode_length_buf >= self.max_episode_length - 1

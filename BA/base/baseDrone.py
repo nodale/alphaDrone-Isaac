@@ -22,7 +22,7 @@ class Drone():
 
         self.setpoint = torch.zeros(num_envs, 3, device=device)
 
-        self.articulation.replace(prim_path="/World/envs/env_.*/drone")
+        self.articulation_cfg.replace(prim_path="/World/envs/env_.*/drone")
         self.articulation = Articulation(self.articulation_cfg)
 
     def init(self):

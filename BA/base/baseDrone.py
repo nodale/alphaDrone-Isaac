@@ -24,7 +24,8 @@ class Drone():
         self.setpoint = torch.zeros(num_envs, 3, device=device)
 
         self.articulation = Articulation(self.articulation_cfg)
-        self.rotor_id = self.articulation.find_bodies("rotor_[1-4]")
 
+    def init(self):
+        self.rotor_id = self.articulation.find_bodies("rotor_[1-4]")
 
         

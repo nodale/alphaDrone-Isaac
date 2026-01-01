@@ -19,6 +19,7 @@ class DroneRunner(DirectRLEnv):
     def _setup_scene(self):
         self.drone = Drone(self.cfg.num_envs)
         self.scene.articulations["drone"] = self.drone.articulation
+        self.drone.init()
 
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing

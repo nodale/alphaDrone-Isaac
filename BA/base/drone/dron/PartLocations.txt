@@ -1,0 +1,92 @@
+Part: Draft8_ver1_mateksys:1 Location: X=0.0000000 m, Y=0.0000000 m, Z=0.0000000 m
+Part: Pixhawk-Jetson-Baseboard-3D:1 Location: X=0.0063753 m, Y=0.0023225 m, Z=-0.0040000 m
+Part: TopCage_BigBoard_Draft2:1 Location: X=0.0060000 m, Y=0.0011200 m, Z=0.0000000 m
+Part: cageTest:1 Location: X=-0.0032309 m, Y=0.0011000 m, Z=0.0119303 m
+Part: cageTest:1\BoardCage_ver6_TOP:1 Location: X=-0.0032369 m, Y=0.0011003 m, Z=0.0119276 m
+Part: cageTest:1\BoardCage_ver7:1 Location: X=-0.0032309 m, Y=0.0011000 m, Z=0.0119303 m
+Part: BatteryCageTop_Draft12:1 Location: X=-0.0007600 m, Y=-0.0007600 m, Z=0.0000000 m
+Part: BatteryCageBottom_Draft9:1 Location: X=0.0004256 m, Y=-0.0073600 m, Z=-0.0000000 m
+Part: bigBattery:1 Location: X=0.0002926 m, Y=-0.0081600 m, Z=-0.0000447 m
+Part: MATEKSYS-PM12S-3:1 Location: X=-0.0016922 m, Y=0.0004500 m, Z=-0.0001500 m
+Part: FA60_andPM12S_chair:1 Location: X=0.0000000 m, Y=0.0004500 m, Z=0.0000000 m
+Part: TMOTOR FA60 4in1 ESC:1 Location: X=0.0024863 m, Y=0.0008500 m, Z=0.0000000 m
+Part: pcba-pm06-0702:1 Location: X=-0.0179902 m, Y=0.0224844 m, Z=-0.0084981 m
+Part: intelRealSenseTest:1 Location: X=0.0077000 m, Y=0.0011000 m, Z=0.0000000 m
+Part: intelRealSenseTest:1\intelRealSense_D435_cage_ver3:1 Location: X=0.0093000 m, Y=0.0008000 m, Z=0.0000100 m
+Part: intelRealSenseTest:1\peripheral_adapter_ver1:1 Location: X=0.0077000 m, Y=0.0011000 m, Z=0.0000000 m
+Part: intelRealSenseTest:1\Intel Realsense D435:1 Location: X=0.0130207 m, Y=-0.0004657 m, Z=0.0000100 m
+Part: DIN 912 - replaced by DIN EN ISO 4762 M3 x 16:1 Location: X=0.0077100 m, Y=0.0008000 m, Z=0.0000000 m
+Part: DIN 912 - replaced by DIN EN ISO 4762 M3 x 6:1 Location: X=0.0059440 m, Y=-0.0014889 m, Z=0.0059440 m
+Part: DIN 912 - replaced by DIN EN ISO 4762 M3 x 6:2 Location: X=0.0059440 m, Y=-0.0014889 m, Z=-0.0059440 m
+Part: DIN 912 - replaced by DIN EN ISO 4762 M3 x 6:3 Location: X=-0.0059440 m, Y=-0.0014889 m, Z=0.0059440 m
+Part: DIN 912 - replaced by DIN EN ISO 4762 M3 x 6:4 Location: X=-0.0059440 m, Y=-0.0014889 m, Z=-0.0059440 m
+Part: DIN 912 - replaced by DIN EN ISO 4762 M3 x 10:1 Location: X=-0.0077000 m, Y=0.0008000 m, Z=0.0000000 m
+Part: DIN 912 - replaced by DIN EN ISO 4762 M3 x 10:2 Location: X=-0.0077000 m, Y=-0.0008000 m, Z=0.0000000 m
+Part: ArmDraft7:1 Location: X=-0.0067134 m, Y=0.0000100 m, Z=0.0067216 m
+Part: ArmDraft7:1\Draft5_ver7_auto:1 Location: X=-0.0067134 m, Y=0.0000100 m, Z=0.0067216 m
+Part: ArmDraft7:1\experimentalBlock_ver2:1 Location: X=-0.0053928 m, Y=-0.0007093 m, Z=0.0054151 m
+Part: ArmDraft7:1\TMOTOR_U5_400kv:1 Location: X=-0.0158351 m, Y=0.0011100 m, Z=0.0158433 m
+Part: ArmDraft7:1\DIN 912 - replaced by DIN EN ISO 4762 M3 x 10:1 Location: X=-0.0158351 m, Y=0.0004000 m, Z=0.0167933 m
+Part: ArmDraft7:1\DIN 912 - replaced by DIN EN ISO 4762 M3 x 10:2 Location: X=-0.0167851 m, Y=0.0004000 m, Z=0.0158433 m
+Part: ArmDraft7:1\DIN 912 - replaced by DIN EN ISO 4762 M3 x 10:3 Location: X=-0.0148851 m, Y=0.0004000 m, Z=0.0158433 m
+Part: ArmDraft7:1\DIN 912 - replaced by DIN EN ISO 4762 M3 x 10:4 Location: X=-0.0158351 m, Y=0.0004000 m, Z=0.0148933 m
+Part: ArmDraft7:1\CFRP_pipe_10mm:1 Location: X=-0.0093679 m, Y=-0.0108780 m, Z=0.0093760 m
+Part: ArmDraft7:1\landingFoot_Draft2:1 Location: X=-0.0093842 m, Y=-0.0110516 m, Z=0.0093924 m
+Part: ArmDraft7:1\HQ_0MacroQuad_Prop_10:1 Location: X=-0.0158351 m, Y=0.0048600 m, Z=0.0158433 m
+Part: ArmDraft7:2 Location: X=-0.0067134 m, Y=0.0000100 m, Z=-0.0067216 m
+Part: ArmDraft7:2\Draft5_ver7_auto:1 Location: X=-0.0067134 m, Y=0.0000100 m, Z=-0.0067216 m
+Part: ArmDraft7:2\experimentalBlock_ver2:1 Location: X=-0.0054070 m, Y=-0.0007093 m, Z=-0.0054010 m
+Part: ArmDraft7:2\TMOTOR_U5_400kv:1 Location: X=-0.0158351 m, Y=0.0011100 m, Z=-0.0158433 m
+Part: ArmDraft7:2\DIN 912 - replaced by DIN EN ISO 4762 M3 x 10:1 Location: X=-0.0167851 m, Y=0.0004000 m, Z=-0.0158433 m
+Part: ArmDraft7:2\DIN 912 - replaced by DIN EN ISO 4762 M3 x 10:2 Location: X=-0.0158351 m, Y=0.0004000 m, Z=-0.0167933 m
+Part: ArmDraft7:2\DIN 912 - replaced by DIN EN ISO 4762 M3 x 10:3 Location: X=-0.0158351 m, Y=0.0004000 m, Z=-0.0148933 m
+Part: ArmDraft7:2\DIN 912 - replaced by DIN EN ISO 4762 M3 x 10:4 Location: X=-0.0148851 m, Y=0.0004000 m, Z=-0.0158433 m
+Part: ArmDraft7:2\CFRP_pipe_10mm:1 Location: X=-0.0093679 m, Y=-0.0108780 m, Z=-0.0093760 m
+Part: ArmDraft7:2\landingFoot_Draft2:1 Location: X=-0.0093842 m, Y=-0.0110516 m, Z=-0.0093924 m
+Part: ArmDraft7:2\HQ_0MacroQuad_Prop_10:1 Location: X=-0.0158351 m, Y=0.0048600 m, Z=-0.0158433 m
+Part: ArmDraft7:3 Location: X=0.0067216 m, Y=0.0000100 m, Z=-0.0067134 m
+Part: ArmDraft7:3\Draft5_ver7_auto:1 Location: X=0.0067216 m, Y=0.0000100 m, Z=-0.0067134 m
+Part: ArmDraft7:3\experimentalBlock_ver2:1 Location: X=0.0054010 m, Y=-0.0007093 m, Z=-0.0054070 m
+Part: ArmDraft7:3\TMOTOR_U5_400kv:1 Location: X=0.0158433 m, Y=0.0011100 m, Z=-0.0158351 m
+Part: ArmDraft7:3\DIN 912 - replaced by DIN EN ISO 4762 M3 x 10:1 Location: X=0.0158433 m, Y=0.0004000 m, Z=-0.0167851 m
+Part: ArmDraft7:3\DIN 912 - replaced by DIN EN ISO 4762 M3 x 10:2 Location: X=0.0167933 m, Y=0.0004000 m, Z=-0.0158351 m
+Part: ArmDraft7:3\DIN 912 - replaced by DIN EN ISO 4762 M3 x 10:3 Location: X=0.0148933 m, Y=0.0004000 m, Z=-0.0158351 m
+Part: ArmDraft7:3\DIN 912 - replaced by DIN EN ISO 4762 M3 x 10:4 Location: X=0.0158433 m, Y=0.0004000 m, Z=-0.0148851 m
+Part: ArmDraft7:3\CFRP_pipe_10mm:1 Location: X=0.0093760 m, Y=-0.0108780 m, Z=-0.0093679 m
+Part: ArmDraft7:3\landingFoot_Draft2:1 Location: X=0.0093924 m, Y=-0.0110516 m, Z=-0.0093842 m
+Part: ArmDraft7:3\HQ_0MacroQuad_Prop_10:1 Location: X=0.0158433 m, Y=0.0048600 m, Z=-0.0158351 m
+Part: ArmDraft7:4 Location: X=0.0067216 m, Y=0.0000100 m, Z=0.0067134 m
+Part: ArmDraft7:4\Draft5_ver7_auto:1 Location: X=0.0067216 m, Y=0.0000100 m, Z=0.0067134 m
+Part: ArmDraft7:4\experimentalBlock_ver2:1 Location: X=0.0054151 m, Y=-0.0007093 m, Z=0.0053928 m
+Part: ArmDraft7:4\TMOTOR_U5_400kv:1 Location: X=0.0158433 m, Y=0.0011100 m, Z=0.0158351 m
+Part: ArmDraft7:4\DIN 912 - replaced by DIN EN ISO 4762 M3 x 10:1 Location: X=0.0167933 m, Y=0.0004000 m, Z=0.0158351 m
+Part: ArmDraft7:4\DIN 912 - replaced by DIN EN ISO 4762 M3 x 10:2 Location: X=0.0158433 m, Y=0.0004000 m, Z=0.0167851 m
+Part: ArmDraft7:4\DIN 912 - replaced by DIN EN ISO 4762 M3 x 10:3 Location: X=0.0158433 m, Y=0.0004000 m, Z=0.0148851 m
+Part: ArmDraft7:4\DIN 912 - replaced by DIN EN ISO 4762 M3 x 10:4 Location: X=0.0148933 m, Y=0.0004000 m, Z=0.0158351 m
+Part: ArmDraft7:4\CFRP_pipe_10mm:1 Location: X=0.0093760 m, Y=-0.0108780 m, Z=0.0093679 m
+Part: ArmDraft7:4\landingFoot_Draft2:1 Location: X=0.0093924 m, Y=-0.0110516 m, Z=0.0093842 m
+Part: ArmDraft7:4\HQ_0MacroQuad_Prop_10:1 Location: X=0.0158433 m, Y=0.0048600 m, Z=0.0158351 m
+Part: cablesssss Location: X=0.0000000 m, Y=0.0000000 m, Z=0.0000000 m
+Part: cablesssss\cablesssss Location: X=0.0000000 m, Y=0.0000000 m, Z=0.0000000 m
+Part: cablesssss\HA_VC_102:1 Location: X=0.0000000 m, Y=0.0000000 m, Z=0.0000000 m
+Part: cablesssss\HA_VC_105:1 Location: X=0.0000000 m, Y=0.0000000 m, Z=0.0000000 m
+Part: cablesssss\HA_VC_108:1 Location: X=0.0000000 m, Y=0.0000000 m, Z=0.0000000 m
+Part: cablesssss\HA_VC_111:1 Location: X=0.0000000 m, Y=0.0000000 m, Z=0.0000000 m
+Part: cablesssss\HA_VC_114:1 Location: X=0.0000000 m, Y=0.0000000 m, Z=0.0000000 m
+Part: cablesssss\HA_VC_117:1 Location: X=0.0000000 m, Y=0.0000000 m, Z=0.0000000 m
+Part: cablesssss\HA_VC_120:1 Location: X=0.0000000 m, Y=0.0000000 m, Z=0.0000000 m
+Part: cablesssss\HA_VC_123:1 Location: X=0.0000000 m, Y=0.0000000 m, Z=0.0000000 m
+Part: cablesssss\HA_VC_126:1 Location: X=0.0000000 m, Y=0.0000000 m, Z=0.0000000 m
+Part: cablesssss\HA_VC_129:1 Location: X=0.0000000 m, Y=0.0000000 m, Z=0.0000000 m
+Part: cablesssss\HA_VC_132:1 Location: X=0.0000000 m, Y=0.0000000 m, Z=0.0000000 m
+Part: cablesssss\HA_VC_135:1 Location: X=0.0000000 m, Y=0.0000000 m, Z=0.0000000 m
+Part: cablesssss\HA_VC_139:1 Location: X=0.0000000 m, Y=0.0000000 m, Z=0.0000000 m
+Part: cablesssss\HA_VC_144:1 Location: X=0.0000000 m, Y=0.0000000 m, Z=0.0000000 m
+Part: cablesssss\HA_VC_235:1 Location: X=0.0000000 m, Y=0.0000000 m, Z=0.0000000 m
+Part: cablesssss\HA_VC_238:1 Location: X=0.0000000 m, Y=0.0000000 m, Z=0.0000000 m
+Part: cablesssss\HA_VC_262:1 Location: X=0.0000000 m, Y=0.0000000 m, Z=0.0000000 m
+
+=== Assembly Physical Properties ===
+Total Mass: 2.65686 kg
+Volume: 1.58717 m³
+Center of Gravity: X=0.00323 m, Y=-0.014 m, Z=-0.000 m

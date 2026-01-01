@@ -20,27 +20,25 @@ from isaaclab.utils import configclass
 from isaaclab.utils.math import subtract_frame_transforms
 from isaaclab.actuators import ImplicitActuatorCfg
 
-drone_cfg = ArticulationCfg(
-        spawn=sim_utils.UsdFileCfg(usd_path="/home/azapata/JoeysStuffs/alphaDrone-Isaac/URDF_template/test3.usda"),
-        actuators={"rotors": ImplicitActuatorCfg(joint_names_expr=["rotor_[1-4]_joint"], damping=None, stiffness=None)},
-        init_state=ArticulationCfg.InitialStateCfg(pos=[0.0, 0.0, 0.2])
-        )   
+class Drone():
+    drone_cfg = ArticulationCfg(
+            spawn=sim_utils.UsdFileCfg(usd_path="drone/test9.usda"),
+            actuators={"rotors": ImplicitActuatorCfg(joint_names_expr=["rotor_[1-4]_joint"], damping=None, stiffness=None)},
+            init_state=ArticulationCfg.InitialStateCfg(pos=[0.0, 0.0, 0.2])
+            )   
 
-class QuadcopterEnvWindow(BaseEnvWindow):
+class DroneEnvWindow(BaseEnvWindow):
 
-    def __init__(self, env: QuadcopterEnv, window_name: str = "IsaacLab"):
-        # initialize base window
+    def __init__(self, env: DroneEnv, window_name: str = "IsaacLab"):
         super().__init__(env, window_name)
-        # add custom UI elements
         with self.ui_window_elements["main_vstack"]:
             with self.ui_window_elements["debug_frame"]:
                 with self.ui_window_elements["debug_vstack"]:
-                    # add command manager visualization
                     self._create_debug_vis_ui_element("targets", self.env)
 
 
 @configclass
-class QuadcopterEnvCfg(DirectRLEnvCfg):
+class DroneEnvCfg(DirectRLEnvCfg):
     episode_length_s = 2.0
     decimation = 1
     action_space = 4
@@ -48,7 +46,7 @@ class QuadcopterEnvCfg(DirectRLEnvCfg):
     state_space = 0
     debug_vis = False
 
-    ui_window_class_type = QuadcopterEnvWindow
+    ui_window_class_type = DroneEnvWindow
 
     sim: SimulationCfg = SimulationCfg(
         dt=1 / 100,
@@ -87,10 +85,10 @@ class QuadcopterEnvCfg(DirectRLEnvCfg):
     reward_alive_scale = 1.0
 
 
-class QuadcopterEnv(DirectRLEnv):
-    cfg: QuadcopterEnvCfg
+class DroneEnv(DirectRLEnv):
+    cfg: DroneEnvCfg
 
-    def __init__(self, cfg: QuadcopterEnvCfg, render_mode: str | None = None, **kwargs):
+    def __init__(self, cfg: DroneEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
 
         self.dof_idx = self._drone.find_joints(name_keys=["rotor_[1-4]_joint"])

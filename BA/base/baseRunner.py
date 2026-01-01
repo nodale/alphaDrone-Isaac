@@ -8,7 +8,7 @@ from baseDrone import Drone
 from baseEnvironment import DroneEnvironment
 
 class DroneRunner(DirectRLEnv):
-    cfg : DroneEnvironment
+    cfg : DroneEnvironment = DroneEnvironment()
     drone : Drone
 
     def __init__(self, cfg: DroneEnvironment, render_mode: str | None = None, **kwargs):

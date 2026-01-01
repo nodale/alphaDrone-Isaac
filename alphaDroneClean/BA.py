@@ -85,10 +85,6 @@ class DroneEnvCfg(DirectRLEnvCfg):
         replicate_physics=True
     )
 
-    drone = Drone.drone_cfg.replace(prim_path="/World/envs/env_.*/drone")
-
-    reward_alive_scale = 1.0
-
 
 class DroneEnv(DirectRLEnv):
     cfg: DroneEnvCfg
@@ -96,10 +92,12 @@ class DroneEnv(DirectRLEnv):
     def __init__(self, cfg: DroneEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
 
+        self.drone_articulation = Drone.drone_cfg.replace(prim_path="/World/envs/env_.*/drone")
+
         #self.set_debug_vis(self.cfg.debug_vis)
 
     def _setup_scene(self):
-        self._drone = Articulation(self.cfg.drone)
+        self._drone = Articulation(self.drone_articulation)
         self.scene.articulations["drone"] = self._drone
 
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs

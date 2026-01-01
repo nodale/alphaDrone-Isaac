@@ -23,8 +23,8 @@ class Drone():
 
         self.setpoint = torch.zeros(num_envs, 3, device=device)
 
-        self.articulation_cfg.replace(prim_path="/World/envs/env_.*/drone")
-        self.articulation = Articulation(self.articulation_cfg)
+        #self.articulation_cfg.replace(prim_path="/World/envs/env_.*/drone")
+        #self.articulation = Articulation(self.articulation_cfg)
 
     def init(self):
         self.rotor_id = self.articulation.find_bodies("rotor_[1-4]")

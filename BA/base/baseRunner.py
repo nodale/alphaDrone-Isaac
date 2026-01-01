@@ -30,6 +30,8 @@ class DroneRunner(DirectRLEnv):
         light_cfg.func("/World/Light", light_cfg)
 
         self.drone = Drone(self.cfg.num_envs)
+        self.drone.articulation_cfg.replace(prim_path="/World/envs/env_.*/drone")
+        self.drone.articulation = Articulation(self.drone.articulation_cfg)
         self.scene.articulations["drone"] = self.drone.articulation
         self.rotor_id = self.drone.articulation.find_bodies("rotor_[1-4]")
 

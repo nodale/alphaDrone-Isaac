@@ -96,7 +96,7 @@ class DroneEnv(DirectRLEnv):
     def _setup_scene(self):
         self.drone = Drone(self.scene.cfg.num_envs)
         self.drone.drone_cfg.replace(prim_path="/World/envs/env_.*/drone")
-        self._drone = Articulation(self.drone_cfg)
+        self._drone = Articulation(self.drone.drone_cfg)
         self.scene.articulations["drone"] = self._drone
 
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs

@@ -65,5 +65,17 @@ class DroneEnvironment(DirectRLEnvCfg):
     )
 
     def __init__(self):
+        self.sim = SimulationCfg(
+            dt=1 / 100,
+            render_interval=decimation,
+            physics_material=sim_utils.RigidBodyMaterialCfg(
+                friction_combine_mode="multiply",
+                restitution_combine_mode="multiply",
+                static_friction=0.0,
+                dynamic_friction=0.0,
+                restitution=0.0,
+            ),
+        )
+
         self.drone = Drone(4)
         self.drone.articulation_cfg.replace(prim_path="/World/envs/env_.*/drone")

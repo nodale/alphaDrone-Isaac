@@ -33,7 +33,6 @@ class Drone():
 
         self.setpoint = torch.zeros(num_envs, 3, device=device)
 
-        self.body_id = self.drone_cfg.find_bodies("rotor_[1-4]")
 
 class DroneEnvWindow(BaseEnvWindow):
     def __init__(self, env: DroneEnv, window_name: str = "IsaacLab"):
@@ -102,6 +101,7 @@ class DroneEnv(DirectRLEnv):
 
     def _setup_scene(self):
         self.drone.drone_cfg.replace(prim_path="/World/envs/env_.*/drone")
+        self.body_id = self.drone.drone_cfg.find_bodies("rotor_[1-4]")
         self._drone = Articulation(self.drone.drone_cfg)
         self.scene.articulations["drone"] = self._drone
 

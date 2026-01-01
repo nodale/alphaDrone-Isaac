@@ -8,7 +8,7 @@ from baseDrone import Drone
 from baseEnvironment import DroneEnvironment
 
 class DroneRunner(DirectRLEnv):
-    cfg : DroneEnvironment = DroneEnvironment()
+    cfg : DroneEnvironment
     drone : Drone
 
     def __init__(self, cfg: DroneEnvironment, render_mode: str | None = None, **kwargs):
@@ -29,10 +29,9 @@ class DroneRunner(DirectRLEnv):
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
 
-        #self.drone = Drone(self.cfg.num_envs)
-        self.drone_articulation = Articulation(self.cfg.drone.articulation_cfg)
-        self.scene.articulations["drone"] = self.drone_articulation
-        self.rotor_id = self.drone.articulation.find_bodies("rotor_[1-4]")
+        self.drone = Drone(self.cfg.num_envs)
+        self.scene.articulations["drone"] = self.drone.articulation
+        self.drone.init()
 
     def _pre_physics_step(self, actions: torch.Tensor):
         self._actions = actions.clone()

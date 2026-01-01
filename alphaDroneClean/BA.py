@@ -92,7 +92,7 @@ class DroneEnvCfg(DirectRLEnvCfg):
 
 class DroneEnv(DirectRLEnv):
     cfg: DroneEnvCfg
-    drone = Drone()
+    drone = Drone(1)
 
     def __init__(self, cfg: DroneEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)

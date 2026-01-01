@@ -115,8 +115,8 @@ class DroneEnv(DirectRLEnv):
         light_cfg.func("/World/Light", light_cfg)
 
 
-    #def _pre_physics_step(self, actions: torch.Tensor):
-    #    self._actions = actions.clone()
+    def _pre_physics_step(self, actions: torch.Tensor):
+        self._actions = actions.clone()
 
     #    self._thrust[:, :, 1] = self._actions[:, :]
     #    self._moment = self._thrust * 10.0

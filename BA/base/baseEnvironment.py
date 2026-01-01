@@ -18,6 +18,8 @@ from isaaclab.utils import configclass
 #                    self._create_debug_vis_ui_element("targets", self.env)
 
 
+from baseDrone import Drone
+
 @configclass
 class DroneEnvironment(DirectRLEnvCfg):
     episode_length_s = 120.0
@@ -61,3 +63,7 @@ class DroneEnvironment(DirectRLEnvCfg):
         env_spacing=2.5, 
         replicate_physics=True
     )
+
+    def __init__(self):
+        self.drone = Drone(self.num_envs)
+        self.drone.articulation_cfg.replace(prim_path="/World/envs/env_.*/drone")

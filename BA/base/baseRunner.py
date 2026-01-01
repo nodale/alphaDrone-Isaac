@@ -29,10 +29,9 @@ class DroneRunner(DirectRLEnv):
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
 
-        self.drone = Drone(self.cfg.num_envs)
-        self.drone.articulation_cfg.replace(prim_path="/World/envs/env_.*/drone")
-        self.drone.articulation = Articulation(self.drone.articulation_cfg)
-        self.scene.articulations["drone"] = self.drone.articulation
+        #self.drone = Drone(self.cfg.num_envs)
+        self.drone_articulation = Articulation(self.cfg.drone.articulation_cfg)
+        self.scene.articulations["drone"] = self.drone_articulation
         self.rotor_id = self.drone.articulation.find_bodies("rotor_[1-4]")
 
     def _pre_physics_step(self, actions: torch.Tensor):

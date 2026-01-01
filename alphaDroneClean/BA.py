@@ -33,7 +33,7 @@ class Drone():
 
         self.setpoint = torch.zeros(num_envs, 3, device=device)
 
-        self.body_id = self._drone.find_bodies("rotor_[1-4]")
+        self.body_id = self.drone_cfg.find_bodies("rotor_[1-4]")
 
 class DroneEnvWindow(BaseEnvWindow):
     def __init__(self, env: DroneEnv, window_name: str = "IsaacLab"):

@@ -23,7 +23,6 @@ from isaaclab.actuators import ImplicitActuatorCfg
 class Drone():
     drone_cfg = ArticulationCfg(
             spawn=sim_utils.UsdFileCfg(usd_path="drone/test9.usda"),
-            prim_path="/World/envs/env_.*/drone",
             actuators={"rotors": ImplicitActuatorCfg(joint_names_expr=["rotor_[1-4]_joint"], damping=None, stiffness=None)},
             init_state=ArticulationCfg.InitialStateCfg(pos=[0.0, 0.0, 0.2])
             )   
@@ -33,7 +32,6 @@ class Drone():
         self.moment = torch.zeros(num_envs, 4, 3, device=device)
 
         self.setpoint = torch.zeros(num_envs, 3, device=device)
-
 
 class DroneEnvWindow(BaseEnvWindow):
     def __init__(self, env: DroneEnv, window_name: str = "IsaacLab"):
@@ -87,23 +85,21 @@ class DroneEnvCfg(DirectRLEnvCfg):
         replicate_physics=True
     )
 
+    drone = Drone.drone_cfg.replace(prim_path="/World/envs/env_.*/drone")
+
     reward_alive_scale = 1.0
 
 
 class DroneEnv(DirectRLEnv):
     cfg: DroneEnvCfg
-    drone = Drone(1)
 
     def __init__(self, cfg: DroneEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
 
-
         #self.set_debug_vis(self.cfg.debug_vis)
 
     def _setup_scene(self):
-        self.drone.drone_cfg.replace(prim_path="/World/envs/env_.*/drone")
-        self._drone = Articulation(self.drone.drone_cfg)
-        self.body_id = self._drone.find_bodies("rotor_[1-4]")
+        self._drone = Articulation(self.cfg.drone)
         self.scene.articulations["drone"] = self._drone
 
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
@@ -119,25 +115,25 @@ class DroneEnv(DirectRLEnv):
         light_cfg.func("/World/Light", light_cfg)
 
 
-    def _pre_physics_step(self, actions: torch.Tensor):
-        self._actions = actions.clone()
+    #def _pre_physics_step(self, actions: torch.Tensor):
+    #    self._actions = actions.clone()
 
-        self.drone.thrust[:, :, 1] = self._actions[:, :]
-        self.drone.moment = self._thrust * 10.0
+    #    self._thrust[:, :, 1] = self._actions[:, :]
+    #    self._moment = self._thrust * 10.0
 
-        self.drone.moment[:, 1, 1] *= -1
-        self.drone.moment[:, 3, 1] *= -1
+    #    self._moment[:, 1, 1] *= -1
+    #    self._moment[:, 3, 1] *= -1
 
-        print(self._thrust)
-        print("\n")
+    #    print(self._thrust)
+    #    print("\n")
 
-    def _apply_action(self):
-        self._drone.set_external_force_and_torque(
-                self.drone.thrust, 
-                self.drone.moment,
-                body_ids=self._body_id[0], 
-                is_global=False
-                )
+    #def _apply_action(self):
+    #    self._drone.set_external_force_and_torque(
+    #            self.thrust, 
+    #            self.moment,
+    #            body_ids=self._body_id[0], 
+    #            is_global=False
+    #            )
 
     def _get_observations(self) -> dict:
         self.observedPosition = self._drone.data.root_link_pos_w

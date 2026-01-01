@@ -17,10 +17,6 @@ class DroneRunner(DirectRLEnv):
         #self.set_debug_vis(self.cfg.debug_vis)
 
     def _setup_scene(self):
-        self.drone = Drone(self.cfg.num_envs)
-        self.scene.articulations["drone"] = self.drone.articulation
-        self.drone.init()
-
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
         self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
@@ -33,6 +29,9 @@ class DroneRunner(DirectRLEnv):
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
 
+        self.drone = Drone(self.cfg.num_envs)
+        self.scene.articulations["drone"] = self.drone.articulation
+        self.drone.init()
 
     def _pre_physics_step(self, actions: torch.Tensor):
         self._actions = actions.clone()

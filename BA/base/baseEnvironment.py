@@ -65,5 +65,5 @@ class DroneEnvironment(DirectRLEnvCfg):
     )
 
     def __init__(self):
-        self.drone = Drone(num_envs)
+        self.drone = Drone(4)
         self.drone.articulation_cfg.replace(prim_path="/World/envs/env_.*/drone")

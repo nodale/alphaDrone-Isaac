@@ -141,7 +141,7 @@ class DroneEnv(DirectRLEnv):
         observations = {"policy": self.observedPosition}
         return observations
 
-    #def _get_rewards(self) -> torch.Tensor:
+    def _get_rewards(self) -> torch.Tensor:
     #    distance_to_goal = torch.linalg.norm(self._desired_pos_w - self._drone.data.root_pos_w, dim=1)
     #    distance_to_goal_mapped = 1 - torch.tanh(distance_to_goal / 0.8)
     #    rewards = {

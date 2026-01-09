@@ -20,6 +20,8 @@ from isaaclab.utils import configclass
 from isaaclab.utils.math import subtract_frame_transforms
 from isaaclab.actuators import ImplicitActuatorCfg
 
+from Kxontroller import Kxontroller
+
 class Drone():
     drone_cfg = ArticulationCfg(
             spawn=sim_utils.UsdFileCfg(usd_path="drone/test9.usda"),
@@ -27,11 +29,17 @@ class Drone():
             init_state=ArticulationCfg.InitialStateCfg(pos=[0.0, 0.0, 0.2])
             )   
 
-    def __init__(self, num_envs, device="cpu"):
-        self.thrust = torch.zeros(num_envs, 4, 3, device=device)
-        self.moment = torch.zeros(num_envs, 4, 3, device=device)
+    def __init__(self, num_envs, device="cuda"):
+        self.thrust = torch.zeros(num_envs, 4, device=device)
+        self.moment = torch.zeros(num_envs, 4, device=device)
+
+
+        self.controller = Kxontroller(num_envs=num_envs)
+        self.rotor_ids = torch.zeros(num_envs, 4, device=device)
 
         self.setpoint = torch.zeros(num_envs, 3, device=device)
+        for sp in self.setpoint:
+            sp[:] = torch.tensor([0.0, 0.0, 1.0], device=device)
 
 class DroneEnvWindow(BaseEnvWindow):
     def __init__(self, env: DroneEnv, window_name: str = "IsaacLab"):
@@ -50,11 +58,12 @@ class DroneEnvCfg(DirectRLEnvCfg):
     observation_space = 6
     state_space = 0
     debug_vis = False
-
+    dt = 1.0/100.0
+    
     ui_window_class_type = DroneEnvWindow
 
     sim: SimulationCfg = SimulationCfg(
-        dt=1 / 100,
+        dt=dt,
         render_interval=decimation,
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
@@ -91,12 +100,17 @@ class DroneEnv(DirectRLEnv):
 
     def __init__(self, cfg: DroneEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
+
+        #list for collecting data
+        self.data = [[] for _ in range(self.scene.cfg.num_envs)]
+        self.drone.rotor_ids = self.drone_articulation.find_bodies("rotor_[1-4]")
+
         #self.set_debug_vis(self.cfg.debug_vis)
 
     def _setup_scene(self):
         self.drone = Drone(self.scene.cfg.num_envs)
-        self._drone = Articulation(self.drone.drone_cfg.replace(prim_path="/World/envs/env_.*/drone"))
-        self.scene.articulations["drone"] = self._drone
+        self.drone_articulation = Articulation(self.drone.drone_cfg.replace(prim_path="/World/envs/env_.*/drone"))
+        self.scene.articulations["drone"] = self.drone_articulation
 
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
@@ -114,31 +128,43 @@ class DroneEnv(DirectRLEnv):
     def _pre_physics_step(self, actions: torch.Tensor):
         self._actions = actions.clone()
 
-    #    self._thrust[:, :, 1] = self._actions[:, :]
-    #    self._moment = self._thrust * 10.0
+        self.drone.controller.step(desired_states=self.drone.setpoint, states=self.drone_articulation.data.body_com_state_w, dt=self.cfg.sim.dt)
 
-    #    self._moment[:, 1, 1] *= -1
-    #    self._moment[:, 3, 1] *= -1
-
-    #    print(self._thrust)
-    #    print("\n")
+        #print(self.drone.controller.ve_thrust)
 
     def _apply_action(self):
-    #   self._drone.set_external_force_and_torque(
-    #           self.thrust, 
-    #           self.moment,
-    #           body_ids=self._body_id[0], 
-    #           is_global=False
-    #           )
-        print("AAAAAAAAAA")
+        self.drone_articulation.set_external_force_and_torque(
+                self.drone.controller.ve_thrust, 
+                self.drone.controller.ve_moment,
+                body_ids=self.drone.rotor_ids[0], 
+                is_global=False
+                )
 
     def _get_observations(self) -> dict:
-        self.observedPosition = self._drone.data.root_link_pos_w
-        observations = {"policy": self.observedPosition}
+        #self.observedPosition,  self.observedQuat, self.observedVelocity, self.observedAngularVelocity = self.drone_articulation.data.body_com_state_w
+        #observations = {
+        #        "pos": self.observedPosition,
+        #        "vel": self.observedVelocity,
+        #        "quat": self.observedQuat,
+        #        "angVel": self.observedAngVelocity,
+        #        "action": self.drone.thrust,
+        #        "setpoint": self.drone.setpoint
+        #        }
+        observations = {}
+
+        for i in range(self.scene.cfg.num_envs):
+            flatten = torch.cat([
+                self.drone_articulation.data.body_com_state_w[i][0],
+                self.drone.thrust[i],
+                self.drone.setpoint[i]
+                ])
+
+            self.data[i].append(flatten.clone())
+
         return observations
 
     def _get_rewards(self) -> torch.Tensor:
-        distance_to_goal = torch.linalg.norm(self._drone.data.root_pos_w, dim=1)
+        distance_to_goal = torch.linalg.norm(self.drone_articulation.data.root_pos_w, dim=1)
         distance_to_goal_mapped = 1 - torch.tanh(distance_to_goal / 0.8)
         rewards = {
                 "distance_to_goal": distance_to_goal_mapped * self.step_dt,
@@ -148,19 +174,21 @@ class DroneEnv(DirectRLEnv):
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         time_out = self.episode_length_buf >= self.max_episode_length - 1
-        died = torch.logical_or(self._drone.data.root_pos_w[:, 2] < 0.1, self._drone.data.root_pos_w[:, 2] > 2.0)
+        died = torch.logical_or(self.drone_articulation.data.root_pos_w[:, 2] < 0.1, self.drone_articulation.data.root_pos_w[:, 2] > 2.0)
         return died, time_out
 
     def _reset_idx(self, env_ids: torch.Tensor | None):
         if env_ids is None or len(env_ids) == self.num_envs:
-            env_ids = self._drone._ALL_INDICES
+            env_ids = self.drone_articulation._ALL_INDICES
 
-        joint_pos = self._drone.data.default_joint_pos[env_ids]
-        joint_vel = self._drone.data.default_joint_vel[env_ids]
-        default_root_state = self._drone.data.default_root_state[env_ids]
+        joint_pos = self.drone_articulation.data.default_joint_pos[env_ids]
+        joint_vel = self.drone_articulation.data.default_joint_vel[env_ids]
+        default_root_state = self.drone_articulation.data.default_root_state[env_ids]
         default_root_state[:, :3] += self._terrain.env_origins[env_ids]
-        self._drone.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
-        self._drone.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
-        self._drone.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
-
+        self.drone_articulation.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
+        self.drone_articulation.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
+        self.drone_articulation.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
+    
+        for i in env_ids:
+            self.data[i].clear()
 

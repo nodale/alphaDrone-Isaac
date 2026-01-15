@@ -2,6 +2,7 @@ import torch as torch
 import numpy as np
 
 import yaml
+from pxr import Gf
 
 class Kilter:
     device = "cuda"
@@ -39,7 +40,7 @@ class Kxontroller:
     move_status: float = 0.0
     u_eq: torch.tensor = torch.tensor([7.43987615, 7.33890313, 7.06352215, 7.16449517], dtype=torch.float32, device="cuda")
 
-    def __init__(self, num_envs, device="cuda", freq=100):
+    def __init__(self, num_envs, device="cuda", freq=200):
         _can_opener = open("controller.yaml", "r")
         _controller_params = yaml.safe_load(_can_opener)
 
@@ -69,13 +70,25 @@ class Kxontroller:
             self.time_summer = 0.0
 
             for env, sp, thrust in zip(states, desired_states, self.thrust):
+                _pre_rot = Gf.Quatd(
+                        float(env[0][3]),
+                    Gf.Vec3d(
+                        float(env[0][4]),
+                        float(env[0][5]),
+                        float(env[0][6])
+                    )
+                )
+                _gf_rot = Gf.Rotation(_pre_rot) 
+                _rot = _gf_rot.Decompose(Gf.Vec3d(1, 0, 0), Gf.Vec3d(0, 1, 0), Gf.Vec3d(0, 0, 1))
+                rot = np.array([_rot[0] * 0.0174532925, _rot[1] * 0.0174532925, _rot[2] * 0.0174532925])
+                
                 _temp_out = self.update(
-                        sp, 
-                        env[0][0:3], 
-                        env[0][3:6], 
-                        env[0][6:9], 
-                        env[0][9:12],
-                        thrust
+                        desired_pos=sp, 
+                        current_pos=env[0][0:3], 
+                        current_vel=env[0][7:10], 
+                        current_att=rot, 
+                        current_ang_vel=env[0][10:13],
+                        thrust=thrust
                         )
 
                 thrust.copy_(_temp_out)
@@ -85,9 +98,9 @@ class Kxontroller:
 
 
         self.ve_thrust[:, :, 2] = self.thrust
-        self.ve_moment[:, :, 2] = self.thrust * 0.0098
-        self.ve_moment[:, 1, 1] *= -1
-        self.ve_moment[:, 3, 1] *= -1
+        self.ve_moment[:, :, 2] = self.thrust * 0.09
+        self.ve_moment[:, 1, 2] *= -1
+        self.ve_moment[:, 3, 2] *= -1
 
     def update(self, desired_pos, current_pos, current_vel, current_att, current_ang_vel, thrust):
 
@@ -143,7 +156,7 @@ class Kxontroller:
         current_state = to_tensor(_state).flatten()
         current_state_offset = to_tensor(_state_offset).flatten()
         current_p_state_offset = to_tensor(_p_state_offset).flatten()
-        print(current_p_state_offset)
+        #print(current_p_state_offset)
         out = self.decide(current_p_state_offset)
         return out
 

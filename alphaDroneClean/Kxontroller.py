@@ -71,11 +71,11 @@ class Kxontroller:
 
             for env, sp, thrust in zip(states, desired_states, self.thrust):
                 _pre_rot = Gf.Quatd(
-                        float(env[0][3]),
+                        float(env[3]),
                     Gf.Vec3d(
-                        float(env[0][4]),
-                        float(env[0][5]),
-                        float(env[0][6])
+                        float(env[4]),
+                        float(env[5]),
+                        float(env[6])
                     )
                 )
                 _gf_rot = Gf.Rotation(_pre_rot) 
@@ -84,10 +84,10 @@ class Kxontroller:
                 
                 _temp_out = self.update(
                         desired_pos=sp, 
-                        current_pos=env[0][0:3], 
-                        current_vel=env[0][7:10], 
+                        current_pos=env[0:3], 
+                        current_vel=env[7:10], 
                         current_att=rot, 
-                        current_ang_vel=env[0][10:13],
+                        current_ang_vel=env[10:13],
                         thrust=thrust
                         )
 

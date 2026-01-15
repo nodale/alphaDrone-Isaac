@@ -22,6 +22,7 @@ from isaaclab.utils.math import subtract_frame_transforms
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.sensors import ImuCfg, Imu
 
+from pxr import Gf
 from Kxontroller import Kxontroller
 
 class Drone():
@@ -106,7 +107,7 @@ class DroneEnvCfg(DirectRLEnvCfg):
 
     scene: InteractiveSceneCfg = DroneSceneCfg(
         num_envs=2, 
-        env_spacing=2.5, 
+        env_spacing=2.0, 
         replicate_physics=True,
     )
 
@@ -121,15 +122,8 @@ class DroneEnv(DirectRLEnv):
         self.data = [[] for _ in range(self.scene.cfg.num_envs)]
         self.drone.rotor_ids = self.scene.articulations["drone"].find_bodies("rotor_[1-4]")
 
-        #self.drone_imu = Imu(self.drone.imu_cfg.replace(prim_path="/World/envs/env_.*/drone/base_link/IMU"))
-        #self.scene.sensors["imu"] = self.drone_imu
-
-        #self.set_debug_vis(self.cfg.debug_vis)
-
     def _setup_scene(self):
         self.drone = Drone(self.scene.cfg.num_envs)
-        #self.scene.articulations["drone"] = Articulation(self.drone.drone_cfg.replace(prim_path="/World/envs/env_.*/drone"))
-        #self.scene.articulations["drone"] = self.scene.articulations["drone"]
 
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
@@ -147,10 +141,7 @@ class DroneEnv(DirectRLEnv):
     def _pre_physics_step(self, actions: torch.Tensor):
         self._actions = actions.clone()
 
-        self.drone.controller.step(desired_states=self.drone.setpoint, states=self.scene.articulations["drone"].data.body_com_state_w, dt=self.cfg.sim.dt)
-
-        #print(self.scene.sensors["imu"].data.lin_acc_b)
-        #print(self.drone.controller.ve_thrust)
+        self.drone.controller.step(desired_states=self.drone.setpoint, states=self.scene.articulations["drone"].data.root_com_state_w, dt=self.cfg.sim.dt)
 
     def _apply_action(self):
         self.scene.articulations["drone"].set_external_force_and_torque(
@@ -173,14 +164,46 @@ class DroneEnv(DirectRLEnv):
         observations = {}
 
         for i in range(self.scene.cfg.num_envs):
+
+            #environment frame to local body frame
+            quat = self.scene.articulations["drone"].data.root_com_quat_w[i],
+            _pre_rot = Gf.Quatd(
+                    float(quat[0][0]),
+                Gf.Vec3d(
+                    float(quat[0][1]),
+                    float(quat[0][2]),
+                    float(quat[0][3])
+                )
+            )
+            _gf_rot = Gf.Rotation(_pre_rot) 
+            _rot = _gf_rot.Decompose(Gf.Vec3d(1, 0, 0), Gf.Vec3d(0, 1, 0), Gf.Vec3d(0, 0, 1))
+            rot = torch.tensor([_rot[0] * 0.0174532925, _rot[1] * 0.0174532925, _rot[2] * 0.0174532925], dtype=torch.float32, device="cuda")
+
+            roll, pitch, yaw = rot
+            cr = torch.cos(roll)
+            sr = torch.sin(roll)
+            cp = torch.cos(pitch)
+            sp = torch.sin(pitch)
+            cy = torch.cos(yaw)
+            sy = torch.sin(yaw)
+
+            R = torch.tensor([
+                [cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr],
+                [sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr],
+                [-sp,   cp*sr,            cp*cr]
+            ], dtype=torch.float32, device="cuda")
+
+            local_lin_vel = R.T @ self.scene.articulations["drone"].data.root_com_lin_vel_b[i]
+            local_ang_vel = R.T @ self.scene.articulations["drone"].data.root_com_ang_vel_b[i]
+            
             flatten = torch.cat([
-                self.scene.articulations["drone"].data.body_com_pos_b[i][0],
-                self.scene.articulations["drone"].data.body_com_quat_b[i][0],
-                self.scene.articulations["drone"].data.body_lin_vel_w[i][0],
-                self.scene.articulations["drone"].data.body_ang_vel_w[i][0],
+                self.scene.articulations["drone"].data.root_com_pos_w[i],
+                local_lin_vel,
+                rot,
+                local_ang_vel,
                 self.scene.sensors["imu"].data.lin_acc_b[i],
                 self.scene.sensors["imu"].data.ang_vel_b[i],
-                self.drone.thrust[i],
+                self.drone.controller.thrust[i],
                 self.drone.setpoint[i]
                 ])
 
@@ -216,6 +239,7 @@ class DroneEnv(DirectRLEnv):
         self.scene.articulations["drone"].write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
         self.episode_length_buf[env_ids] = 0
     
+        #printing the data, so we store each environment intoa buffer, then print em when it is reset
         for i in env_ids:
             if not self.data[i]:     
                 continue

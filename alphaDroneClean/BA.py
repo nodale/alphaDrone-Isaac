@@ -114,7 +114,7 @@ class DroneSceneCfg(InteractiveSceneCfg):
 
 @configclass
 class DroneEnvCfg(DirectRLEnvCfg):
-    episode_length_s = 2.0
+    episode_length_s = 1.0
     decimation = 1
     action_space = 4
     observation_space = 6
@@ -161,14 +161,15 @@ class DroneEnv(DirectRLEnv):
     cfg: DroneEnvCfg
 
     def __init__(self, cfg: DroneEnvCfg, render_mode: str | None = None, **kwargs):
-        super().__init__(cfg, render_mode, **kwargs)
+        #super().__init__(cfg, render_mode, **kwargs)
+        super().__init__(cfg, render_mode="None", **kwargs)
 
         #list for collecting data
         self.data = [[] for _ in range(self.scene.cfg.num_envs)]
         self.drone.rotor_ids = self.scene.articulations["drone"].find_bodies("rotor_[1-4]")
 
         #data writer
-        self.max_iter = 1000
+        self.max_iter = 10000
         self.seq_len = self.cfg.episode_length_s / self.cfg.sim.dt
         self.writer = DataWriter(num_batch=self.max_iter, num_points=self.seq_len, n_dim=12)
 
@@ -184,8 +185,8 @@ class DroneEnv(DirectRLEnv):
         if self.device == "cpu":
             self.scene.filter_collisions(global_prim_paths=[self.cfg.terrain.prim_path])
 
-        light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
-        light_cfg.func("/World/Light", light_cfg)
+        #light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
+        #light_cfg.func("/World/Light", light_cfg)
 
 
     def _pre_physics_step(self, actions: torch.Tensor):

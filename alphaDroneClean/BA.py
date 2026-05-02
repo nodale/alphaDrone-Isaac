@@ -8,6 +8,7 @@ import gymnasium as gym
 import numpy as np
 import torch
 import time
+import zarr
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation, ArticulationCfg
@@ -50,6 +51,38 @@ class Drone():
         self.setpoint = torch.zeros(num_envs, 3, device=device)
         for sp in self.setpoint:
             sp[:] = torch.tensor([0.0, 0.0, 2.0], device=device)
+
+class DataWriter():
+    def __init__(self, path="dataset/all_data.zarr/", num_points=10, num_batch=10, n_dim=12, chunk=5000):
+        #num of ppoints should be calculated by the following : eps_length(s) * sim_freq(Hz)
+        self.path = path
+        self.num_points = int(num_points)
+        self.num_batch = int(num_batch)
+        self.n_dim = int(n_dim)
+        self.chunk = int(chunk)
+
+        if self.path is not None:
+            self.store = zarr.storage.LocalStore(self.path)
+            self.root = zarr.group(store=self.store, overwrite=True)
+            self.data = self.root.create_group('data')
+
+            self.arrays = {
+                i: self.data.create_array(
+                    name=f"dim_{i}",
+                    shape=(self.num_batch, self.num_points), #put self.num_batch here for dynamic size
+                    chunks=(self.chunk, self.num_points),
+                    dtype="f4",
+                    overwrite="True"
+                )
+                for i in range(self.n_dim)
+            }
+    def write_batch(self, data):
+        b = data.shape[0]
+
+        for i, arr in self.arrays.items():
+            start = len(arr)
+            arr.resize(start + b, axis=0)
+            arr[start:start + b] = data[:, :, i]
 
 class DroneEnvWindow(BaseEnvWindow):
     def __init__(self, env: DroneEnv, window_name: str = "IsaacLab"):
@@ -121,6 +154,11 @@ class DroneEnv(DirectRLEnv):
         #list for collecting data
         self.data = [[] for _ in range(self.scene.cfg.num_envs)]
         self.drone.rotor_ids = self.scene.articulations["drone"].find_bodies("rotor_[1-4]")
+
+        #data writer
+        self.max_iter = 1000
+        self.seq_len = self.max_episode_length / self.cfg.sim.dt
+        self.writer = DataWriter(num_batch=self.max_iter, num_points=self.seq_len, n_dim=12, chunk=self.max_iter)
 
     def _setup_scene(self):
         self.drone = Drone(self.scene.cfg.num_envs)

@@ -49,17 +49,18 @@ class Drone():
         self.rotor_ids = torch.zeros(num_envs, 4, device=device)
 
         self.setpoint = torch.zeros(num_envs, 3, device=device)
+
         for sp in self.setpoint:
             sp[:] = torch.tensor([0.0, 0.0, 2.0], device=device)
 
 class DataWriter():
-    def __init__(self, path="dataset/all_data.zarr/", num_points=10, num_batch=10, n_dim=12, chunk=5000):
-        #num of ppoints should be calculated by the following : eps_length(s) * sim_freq(Hz)
+    def __init__(self, path="dataset/all_data.zarr/", num_points=10, num_batch=10, n_dim=12):
         self.path = path
         self.num_points = int(num_points)
         self.num_batch = int(num_batch)
         self.n_dim = int(n_dim)
-        self.chunk = int(chunk)
+
+        self.batch_idx = 0 
 
         if self.path is not None:
             self.store = zarr.storage.LocalStore(self.path)
@@ -69,21 +70,32 @@ class DataWriter():
             self.arrays = {
                 i: self.data.create_array(
                     name=f"dim_{i}",
-                    shape=(self.num_batch, self.num_points), #put self.num_batch here for dynamic size
-                    chunks=(self.chunk, self.num_points),
+                    shape=(self.num_batch, self.num_points),
+                    chunks=(1, self.num_points), 
                     dtype="f4",
-                    overwrite="True"
+                    overwrite=True
                 )
                 for i in range(self.n_dim)
             }
-    def write_batch(self, data):
-        b = data.shape[0]
+
+    def __del__(self):
+        self.store.close()
+
+    def write_episode(self, data):
+        # data: (num_points, n_dim)
+
+        if self.batch_idx >= self.num_batch:
+            print(" DataWriter full, skipping write")
+            return
+
+        if data.shape[0] != self.num_points:
+            raise ValueError(f"Expected {self.num_points} timesteps, got {data.shape[0]}")
 
         for i, arr in self.arrays.items():
-            start = len(arr)
-            arr.resize(start + b, axis=0)
-            arr[start:start + b] = data[:, :, i]
+            arr[self.batch_idx, :] = data[:, i]
 
+        self.batch_idx += 1
+        
 class DroneEnvWindow(BaseEnvWindow):
     def __init__(self, env: DroneEnv, window_name: str = "IsaacLab"):
         super().__init__(env, window_name)
@@ -157,8 +169,8 @@ class DroneEnv(DirectRLEnv):
 
         #data writer
         self.max_iter = 1000
-        self.seq_len = self.max_episode_length / self.cfg.sim.dt
-        self.writer = DataWriter(num_batch=self.max_iter, num_points=self.seq_len, n_dim=12, chunk=self.max_iter)
+        self.seq_len = self.cfg.episode_length_s / self.cfg.sim.dt
+        self.writer = DataWriter(num_batch=self.max_iter, num_points=self.seq_len, n_dim=12)
 
     def _setup_scene(self):
         self.drone = Drone(self.scene.cfg.num_envs)
@@ -190,19 +202,9 @@ class DroneEnv(DirectRLEnv):
                 )
 
     def _get_observations(self) -> dict:
-        #self.observedPosition,  self.observedQuat, self.observedVelocity, self.observedAngularVelocity = self.scene.articulations["drone"].data.body_com_state_w
-        #observations = {
-        #        "pos": self.observedPosition,
-        #        "vel": self.observedVelocity,
-        #        "quat": self.observedQuat,
-        #        "angVel": self.observedAngVelocity,
-        #        "action": self.drone.thrust,
-        #        "setpoint": self.drone.setpoint
-        #        }
         observations = {}
 
         for i in range(self.scene.cfg.num_envs):
-
             #environment frame to local body frame
             quat = self.scene.articulations["drone"].data.root_com_quat_w[i],
             _pre_rot = Gf.Quatd(
@@ -259,7 +261,7 @@ class DroneEnv(DirectRLEnv):
         return reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
-        time_out = self.episode_length_buf >= self.max_episode_length - 1
+        time_out = self.episode_length_buf >= self.max_episode_length
         #died = torch.logical_or(self.scene.articulations["drone"].data.root_pos_w[:, 2] < 0.0, self.scene.articulations["drone"].data.root_pos_w[:, 2] > 20.0)
         died = torch.zeros_like(time_out, dtype=torch.bool)
         return died, time_out
@@ -268,27 +270,90 @@ class DroneEnv(DirectRLEnv):
         if env_ids is None or len(env_ids) == self.num_envs:
             env_ids = self.scene.articulations["drone"]._ALL_INDICES
 
-        joint_pos = self.scene.articulations["drone"].data.default_joint_pos[env_ids]
-        joint_vel = self.scene.articulations["drone"].data.default_joint_vel[env_ids]
-        default_root_state = self.scene.articulations["drone"].data.default_root_state[env_ids]
-        default_root_state[:, :3] += self._terrain.env_origins[env_ids]
-        self.scene.articulations["drone"].write_root_pose_to_sim(default_root_state[:, :7], env_ids)
-        self.scene.articulations["drone"].write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
+        # clone defaults so we don’t overwrite internal buffers
+        joint_pos = self.scene.articulations["drone"].data.default_joint_pos[env_ids].clone()
+        joint_vel = self.scene.articulations["drone"].data.default_joint_vel[env_ids].clone()
+        root_state = self.scene.articulations["drone"].data.default_root_state[env_ids].clone()
+
+        # --- POSITION RANDOMIZATION ---
+        pos_noise = torch.empty((len(env_ids), 3), device=self.device).uniform_(-0.5, 0.5)
+        root_state[:, :3] += pos_noise
+
+        # keep above ground
+        root_state[:, 2] = torch.clamp(root_state[:, 2], min=0.2)
+
+        # add env origins
+        root_state[:, :3] += self._terrain.env_origins[env_ids]
+
+        # --- ORIENTATION RANDOMIZATION (yaw only for stability) ---
+        yaw = torch.empty(len(env_ids), device=self.device).uniform_(-torch.pi/20.0, torch.pi/20.0)
+
+        cy = torch.cos(yaw * 0.5)
+        sy = torch.sin(yaw * 0.5)
+
+        # quaternion (x, y, z, w) → Isaac uses (w, x, y, z)
+        root_state[:, 3:7] = torch.stack([
+            cy,                         # w
+            torch.zeros_like(cy),       # x
+            torch.zeros_like(cy),       # y
+            sy                          # z
+        ], dim=1)
+
+        # --- LINEAR VELOCITY RANDOMIZATION ---
+        lin_vel_noise = torch.empty((len(env_ids), 3), device=self.device).uniform_(-2.0, 2.0)
+        root_state[:, 7:10] = lin_vel_noise
+
+        # --- ANGULAR VELOCITY RANDOMIZATION ---
+        ang_vel_noise = torch.empty((len(env_ids), 3), device=self.device).uniform_(-0.1, 0.1)
+        root_state[:, 10:13] = ang_vel_noise
+
+        # --- JOINT RANDOMIZATION (rotors) ---
+        joint_vel_noise = torch.empty_like(joint_vel).uniform_(-0.1, 0.1)
+        joint_vel += joint_vel_noise
+
+        # (optional) small position noise if joints have meaningful angles
+        joint_pos_noise = torch.empty_like(joint_pos).uniform_(-0.1, 0.1)
+        joint_pos += joint_pos_noise
+
+        # --- WRITE TO SIM ---
+        self.scene.articulations["drone"].write_root_pose_to_sim(root_state[:, :7], env_ids)
+        self.scene.articulations["drone"].write_root_velocity_to_sim(root_state[:, 7:], env_ids)
         self.scene.articulations["drone"].write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
+
         self.episode_length_buf[env_ids] = 0
-    
+
+        # random offset (relative target)
+        low = torch.tensor([-1.0, -1.0, 0.5], device=self.device)
+        high = torch.tensor([1.0, 1.0, 3.0], device=self.device)
+
+        rand = torch.rand((len(env_ids), 3), device=self.device)
+        offset = low + (high - low) * rand
+
+        # base position = environment origin (spawn reference)
+        base_pos = self._terrain.env_origins[env_ids]
+
+        # final setpoint = relative to spawn
+        self.drone.setpoint[env_ids] = base_pos + offset
+
         #printing the data, so we store each environment intoa buffer, then print em when it is reset
         for i in env_ids:
-            if not self.data[i]:     
+            if not self.data[i]:
                 continue
 
-            timestamp = int(time.time())
-            t = torch.stack(self.data[i]).to(torch.float32).contiguous()
+            t = torch.stack(self.data[i])  # (T, dim)
 
-            filename = f"data/drone_{i}_{timestamp}.bin"
+            if t.shape[0] != self.seq_len:
+                continue  # or pad
 
-            with open(filename, "wb") as f:
-                f.write(t.cpu().numpy().tobytes())
+            t = t.cpu().numpy()
+
+            self.writer.write_episode(t)
 
             self.data[i].clear()
 
+        print("progress : ", self.writer.batch_idx, " out of ", self.writer.num_batch)
+        if self.writer.batch_idx >= self.writer.num_batch:
+            print("Dataset complete. Stopping simulation...")
+
+            self.writer.store.close()
+            raise SystemExit

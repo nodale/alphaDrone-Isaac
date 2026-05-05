@@ -166,7 +166,7 @@ class DroneEnv(DirectRLEnv):
 
         #data writer
         self.n_dim = 25
-        self.max_iter = 1000
+        self.max_iter = 100000
         self.seq_len = int(self.cfg.episode_length_s / self.cfg.sim.dt)
         self.writer = DataWriter(num_batch=self.max_iter, num_points=self.seq_len, n_dim=self.n_dim)
         self.t1 = 1.0
@@ -258,11 +258,11 @@ class DroneEnv(DirectRLEnv):
             self.drone.setpoint
         ], dim=1)  # (N, dim)
 
-        for i in range(self.scene.num_envs):
-            idx = self.step_idx[i]
-            if idx < self.seq_len:
-                self.data[i, idx] = obs[i]
-                self.step_idx[i] += 1
+        valid = self.step_idx < self.seq_len  # (N,)
+        idx = self.step_idx[valid]
+
+        self.data[valid, idx] = obs[valid]
+        self.step_idx[valid] += 1
 
         return observations
 

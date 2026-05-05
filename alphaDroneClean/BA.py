@@ -54,7 +54,7 @@ class Drone():
             sp[:] = torch.tensor([0.0, 0.0, 2.0], device=device)
 
 class DataWriter():
-    def __init__(self, path="dataset/all_data.zarr/", num_points=10, num_batch=10, n_dim=12):
+    def __init__(self, path="dataset/train_data.zarr/", num_points=10, num_batch=10, n_dim=25):
         self.path = path
         self.num_points = int(num_points)
         self.num_batch = int(num_batch)
@@ -162,18 +162,20 @@ class DroneEnv(DirectRLEnv):
 
     def __init__(self, cfg: DroneEnvCfg, render_mode: str | None = None, **kwargs):
         #super().__init__(cfg, render_mode, **kwargs)
-        super().__init__(cfg, render_mode="None", **kwargs)
-
-        #list for collecting data
-        self.data = [[] for _ in range(self.scene.cfg.num_envs)]
-        self.drone.rotor_ids = self.scene.articulations["drone"].find_bodies("rotor_[1-4]")
+        super().__init__(cfg, render_mode=None, **kwargs)
 
         #data writer
-        self.max_iter = 100000
-        self.seq_len = self.cfg.episode_length_s / self.cfg.sim.dt
-        self.writer = DataWriter(num_batch=self.max_iter, num_points=self.seq_len, n_dim=12)
+        self.n_dim = 25
+        self.max_iter = 1000
+        self.seq_len = int(self.cfg.episode_length_s / self.cfg.sim.dt)
+        self.writer = DataWriter(num_batch=self.max_iter, num_points=self.seq_len, n_dim=self.n_dim)
         self.t1 = 1.0
         self.t0 = 0.0
+
+        #list for collecting data
+        self.data = torch.zeros(self.scene.num_envs, self.seq_len, self.n_dim, device="cuda")
+        self.step_idx = torch.zeros(self.scene.num_envs, dtype=torch.long, device="cpu")
+        self.drone.rotor_ids = self.scene.articulations["drone"].find_bodies("rotor_[1-4]")
 
     def _setup_scene(self):
         self.drone = Drone(self.scene.cfg.num_envs)
@@ -207,52 +209,63 @@ class DroneEnv(DirectRLEnv):
     def _get_observations(self) -> dict:
         observations = {}
 
-        for i in range(self.scene.cfg.num_envs):
-            #environment frame to local body frame
-            quat = self.scene.articulations["drone"].data.root_com_quat_w[i],
-            _pre_rot = Gf.Quatd(
-                    float(quat[0][0]),
-                Gf.Vec3d(
-                    float(quat[0][1]),
-                    float(quat[0][2]),
-                    float(quat[0][3])
-                )
-            )
-            _gf_rot = Gf.Rotation(_pre_rot) 
-            _rot = _gf_rot.Decompose(Gf.Vec3d(1, 0, 0), Gf.Vec3d(0, 1, 0), Gf.Vec3d(0, 0, 1))
-            rot = torch.tensor([_rot[0] * 0.0174532925, _rot[1] * 0.0174532925, _rot[2] * 0.0174532925], dtype=torch.float32, device="cuda")
+        drone_data = self.scene.articulations["drone"].data
+        imu_data = self.scene.sensors["imu"].data
 
-            roll, pitch, yaw = rot
-            cr = torch.cos(roll)
-            sr = torch.sin(roll)
-            cp = torch.cos(pitch)
-            sp = torch.sin(pitch)
-            cy = torch.cos(yaw)
-            sy = torch.sin(yaw)
+        pos = drone_data.root_com_pos_w                      # (N, 3)
+        quat = drone_data.root_com_quat_w                    # (N, 4) [w, x, y, z]
+        lin_vel = drone_data.root_com_lin_vel_b              # (N, 3)
+        ang_vel = drone_data.root_com_ang_vel_b              # (N, 3)
 
-            R = torch.tensor([
-                [cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr],
-                [sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr],
-                [-sp,   cp*sr,            cp*cr]
-            ], dtype=torch.float32, device="cuda")
+        w, x, y, z = quat.unbind(dim=1)
 
-            local_lin_vel = R.T @ self.scene.articulations["drone"].data.root_com_lin_vel_b[i]
-            local_ang_vel = R.T @ self.scene.articulations["drone"].data.root_com_ang_vel_b[i]
-            
-            flatten = torch.cat([
-                self.scene.articulations["drone"].data.root_com_pos_w[i],
-                local_lin_vel,
-                rot,
-                local_ang_vel,
-                self.scene.sensors["imu"].data.lin_acc_b[i],
-                self.scene.sensors["imu"].data.ang_vel_b[i],
-                self.drone.controller.thrust[i],
-                self.drone.setpoint[i]
-                ])
+        R = torch.stack([
+            torch.stack([1 - 2*(y*y + z*z), 2*(x*y - z*w),     2*(x*z + y*w)], dim=1),
+            torch.stack([2*(x*y + z*w),     1 - 2*(x*x + z*z), 2*(y*z - x*w)], dim=1),
+            torch.stack([2*(x*z - y*w),     2*(y*z + x*w),     1 - 2*(x*x + y*y)], dim=1)
+        ], dim=1)
 
-            self.data[i].append(flatten.clone())
+        R_T = R.transpose(1, 2)
+
+        local_lin_vel = torch.bmm(R_T, lin_vel.unsqueeze(-1)).squeeze(-1)
+        local_ang_vel = torch.bmm(R_T, ang_vel.unsqueeze(-1)).squeeze(-1)
+
+        sinr_cosp = 2 * (w * x + y * z)
+        cosr_cosp = 1 - 2 * (x * x + y * y)
+        roll = torch.atan2(sinr_cosp, cosr_cosp)
+
+        sinp = 2 * (w * y - z * x)
+        pitch = torch.where(
+            torch.abs(sinp) >= 1,
+            torch.sign(sinp) * (torch.pi / 2),
+            torch.asin(sinp)
+        )
+
+        siny_cosp = 2 * (w * z + x * y)
+        cosy_cosp = 1 - 2 * (y * y + z * z)
+        yaw = torch.atan2(siny_cosp, cosy_cosp)
+
+        rot = torch.stack([roll, pitch, yaw], dim=1)  # (N, 3)
+
+        obs = torch.cat([
+            pos,
+            local_lin_vel,
+            rot,
+            local_ang_vel,
+            imu_data.lin_acc_b,
+            imu_data.ang_vel_b,
+            self.drone.controller.thrust,
+            self.drone.setpoint
+        ], dim=1)  # (N, dim)
+
+        for i in range(self.scene.num_envs):
+            idx = self.step_idx[i]
+            if idx < self.seq_len:
+                self.data[i, idx] = obs[i]
+                self.step_idx[i] += 1
 
         return observations
+
 
     def _get_rewards(self) -> torch.Tensor:
         distance_to_goal = torch.linalg.norm(self.scene.articulations["drone"].data.root_pos_w, dim=1)
@@ -338,30 +351,25 @@ class DroneEnv(DirectRLEnv):
         # final setpoint = relative to spawn
         self.drone.setpoint[env_ids] = base_pos + offset
 
-        #printing the data, so we store each environment intoa buffer, then print em when it is reset
         for i in env_ids:
-            if not self.data[i]:
-                continue
+            if self.step_idx[i] < self.seq_len:
+                continue  
 
-            t = torch.stack(self.data[i])  # (T, dim)
-
-            if t.shape[0] != self.seq_len:
-                continue  # or pad
-
-            t = t.cpu().numpy()
-
+            t = self.data[i].cpu().numpy()
             self.writer.write_episode(t)
 
-            self.data[i].clear()
+            self.data[i].zero_()
+            self.step_idx[i] = 0
+
+        self.t0=self.t1
+        self.t1=time.perf_counter()
+
+        print("time : ", self.t1 - self.t0)
 
         print("progress : ", self.writer.batch_idx, " out of ", self.writer.num_batch)
         if self.writer.batch_idx >= self.writer.num_batch:
             print("Dataset complete. Stopping simulation...")
 
-            self.t0=self.t1
-            self.t1=time.perf_counter()
-
-            print("time : ", self.t1 - self.t0)
 
             self.writer.store.close()
             raise SystemExit

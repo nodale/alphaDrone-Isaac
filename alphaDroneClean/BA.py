@@ -169,9 +169,11 @@ class DroneEnv(DirectRLEnv):
         self.drone.rotor_ids = self.scene.articulations["drone"].find_bodies("rotor_[1-4]")
 
         #data writer
-        self.max_iter = 10000
+        self.max_iter = 100000
         self.seq_len = self.cfg.episode_length_s / self.cfg.sim.dt
         self.writer = DataWriter(num_batch=self.max_iter, num_points=self.seq_len, n_dim=12)
+        self.t1 = 1.0
+        self.t0 = 0.0
 
     def _setup_scene(self):
         self.drone = Drone(self.scene.cfg.num_envs)
@@ -355,6 +357,11 @@ class DroneEnv(DirectRLEnv):
         print("progress : ", self.writer.batch_idx, " out of ", self.writer.num_batch)
         if self.writer.batch_idx >= self.writer.num_batch:
             print("Dataset complete. Stopping simulation...")
+
+            self.t0=self.t1
+            self.t1=time.perf_counter()
+
+            print("time : ", self.t1 - self.t0)
 
             self.writer.store.close()
             raise SystemExit

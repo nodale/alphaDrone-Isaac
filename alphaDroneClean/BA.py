@@ -54,48 +54,34 @@ class Drone():
             sp[:] = torch.tensor([0.0, 0.0, 2.0], device=device)
 
 class DataWriter():
-    def __init__(self, path="dataset/train_data.zarr/", num_points=10, num_batch=10, n_dim=25):
+    def __init__(self, path="dataset/patient_one_data.zarr/", num_batch=10, seq_len=10, n_dim=25):
         self.path = path
-        self.num_points = int(num_points)
         self.num_batch = int(num_batch)
+        self.seq_len = int(seq_len)
         self.n_dim = int(n_dim)
 
         self.batch_idx = 0 
 
-        if self.path is not None:
-            self.store = zarr.storage.LocalStore(self.path)
-            self.root = zarr.group(store=self.store, overwrite=True)
-            self.data = self.root.create_group('data')
+        self.store = zarr.storage.LocalStore(self.path)
+        self.root = zarr.group(store=self.store, overwrite=True)
 
-            self.arrays = {
-                i: self.data.create_array(
-                    name=f"dim_{i}",
-                    shape=(self.num_batch, self.num_points),
-                    chunks=(1, self.num_points), 
-                    dtype="f4",
-                    overwrite=True
-                )
-                for i in range(self.n_dim)
-            }
+        self.data = self.root.create_array(
+            name="episodes",
+            shape=(self.num_batch, self.seq_len, self.n_dim),
+            chunks=(1, self.seq_len, self.n_dim), 
+            dtype="f4",
+            overwrite=True
+        )
 
     def __del__(self):
         self.store.close()
 
     def write_episode(self, data):
-        # data: (num_points, n_dim)
+        #(seq_len, n_dim)
+        self.data[self.batch_idx, :, :] = data
+        self.batch_idx += 1 
 
-        if self.batch_idx >= self.num_batch:
-            print(" DataWriter full, skipping write")
-            return
 
-        if data.shape[0] != self.num_points:
-            raise ValueError(f"Expected {self.num_points} timesteps, got {data.shape[0]}")
-
-        for i, arr in self.arrays.items():
-            arr[self.batch_idx, :] = data[:, i]
-
-        self.batch_idx += 1
-        
 class DroneEnvWindow(BaseEnvWindow):
     def __init__(self, env: DroneEnv, window_name: str = "IsaacLab"):
         super().__init__(env, window_name)
@@ -166,9 +152,9 @@ class DroneEnv(DirectRLEnv):
 
         #data writer
         self.n_dim = 25
-        self.max_iter = 100000
+        self.max_iter = 1000
         self.seq_len = int(self.cfg.episode_length_s / self.cfg.sim.dt)
-        self.writer = DataWriter(num_batch=self.max_iter, num_points=self.seq_len, n_dim=self.n_dim)
+        self.writer = DataWriter(num_batch=self.max_iter, seq_len=self.seq_len, n_dim=self.n_dim)
         self.t1 = 1.0
         self.t0 = 0.0
 
@@ -351,15 +337,30 @@ class DroneEnv(DirectRLEnv):
         # final setpoint = relative to spawn
         self.drone.setpoint[env_ids] = base_pos + offset
 
-        for i in env_ids:
-            if self.step_idx[i] < self.seq_len:
-                continue  
+        # find envs that finished collecting a full sequence
+        _env_ids = env_ids.cpu()
+        done_mask = self.step_idx[_env_ids] >= self.seq_len
+        done_env_ids = env_ids[done_mask]
 
-            t = self.data[i].cpu().numpy()
-            self.writer.write_episode(t)
+        if len(done_env_ids) > 0:
+            # gather all episodes at once
+            batch_data = self.data[done_env_ids].detach().cpu().numpy()  # (B, seq_len, n_dim)
 
-            self.data[i].zero_()
-            self.step_idx[i] = 0
+            B = batch_data.shape[0]
+
+            # write directly into zarr (NEW fast path)
+            start = self.writer.batch_idx
+            end = start + B
+
+            if end > self.writer.num_batch:
+                print("DataWriter full, skipping write")
+            else:
+                self.writer.data[start:end, :, :] = batch_data
+                self.writer.batch_idx += B
+
+            # reset buffers
+            self.data[done_env_ids].zero_()
+            self.step_idx[done_env_ids] = 0
 
         self.t0=self.t1
         self.t1=time.perf_counter()

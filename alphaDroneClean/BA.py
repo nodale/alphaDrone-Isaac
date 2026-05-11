@@ -69,7 +69,7 @@ class DataWriter():
             name="episodes",
             shape=(self.num_batch, self.seq_len, self.n_dim),
             chunks=(1, self.seq_len, self.n_dim), 
-            dtype="f4",
+            dtype="f8",
             overwrite=True
         )
 
@@ -100,7 +100,7 @@ class DroneSceneCfg(InteractiveSceneCfg):
 
 @configclass
 class DroneEnvCfg(DirectRLEnvCfg):
-    episode_length_s = 1.0
+    episode_length_s = 2.5
     decimation = 1
     action_space = 4
     observation_space = 6
@@ -151,8 +151,8 @@ class DroneEnv(DirectRLEnv):
         super().__init__(cfg, render_mode=None, **kwargs)
 
         #data writer
-        self.n_dim = 25
-        self.max_iter = 1000
+        self.n_dim = 26
+        self.max_iter = 2000
         self.seq_len = int(self.cfg.episode_length_s / self.cfg.sim.dt)
         self.writer = DataWriter(num_batch=self.max_iter, seq_len=self.seq_len, n_dim=self.n_dim)
         self.t1 = 1.0
@@ -233,6 +233,7 @@ class DroneEnv(DirectRLEnv):
 
         rot = torch.stack([roll, pitch, yaw], dim=1)  # (N, 3)
 
+        env_timestamp = self.episode_length_buf.reshape(self.episode_length_buf.shape[0], 1) * self.cfg.sim.dt
         obs = torch.cat([
             pos,
             local_lin_vel,
@@ -241,7 +242,8 @@ class DroneEnv(DirectRLEnv):
             imu_data.lin_acc_b,
             imu_data.ang_vel_b,
             self.drone.controller.thrust,
-            self.drone.setpoint
+            self.drone.setpoint,
+            env_timestamp
         ], dim=1)  # (N, dim)
 
         valid = self.step_idx < self.seq_len  # (N,)
@@ -337,30 +339,15 @@ class DroneEnv(DirectRLEnv):
         # final setpoint = relative to spawn
         self.drone.setpoint[env_ids] = base_pos + offset
 
-        # find envs that finished collecting a full sequence
-        _env_ids = env_ids.cpu()
-        done_mask = self.step_idx[_env_ids] >= self.seq_len
-        done_env_ids = env_ids[done_mask]
+        for i in env_ids:
+            if self.step_idx[i] < self.seq_len:
+                continue  
 
-        if len(done_env_ids) > 0:
-            # gather all episodes at once
-            batch_data = self.data[done_env_ids].detach().cpu().numpy()  # (B, seq_len, n_dim)
+            t = self.data[i].detach().to("cpu", non_blocking=True).numpy()
+            self.writer.write_episode(t)
 
-            B = batch_data.shape[0]
-
-            # write directly into zarr (NEW fast path)
-            start = self.writer.batch_idx
-            end = start + B
-
-            if end > self.writer.num_batch:
-                print("DataWriter full, skipping write")
-            else:
-                self.writer.data[start:end, :, :] = batch_data
-                self.writer.batch_idx += B
-
-            # reset buffers
-            self.data[done_env_ids].zero_()
-            self.step_idx[done_env_ids] = 0
+            self.data[i].zero_()
+            self.step_idx[i] = 0
 
         self.t0=self.t1
         self.t1=time.perf_counter()

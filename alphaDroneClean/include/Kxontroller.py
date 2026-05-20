@@ -16,7 +16,7 @@ class Kilter:
 
     def __init__(self):
         #to init A_d and B_d and U_k
-        _can_opener = open("controller.yaml", "r")
+        _can_opener = open("include/controller.yaml", "r")
         _controller_params = yaml.safe_load(_can_opener)
         self.K = torch.tensor(_controller_params['K'], dtype=torch.float32,     device="cuda")
         self.A_d = torch.tensor(_controller_params['A_d'], dtype=torch.float32, device="cuda")
@@ -41,7 +41,7 @@ class Kxontroller:
     u_eq: torch.tensor = torch.tensor([7.43987615, 7.33890313, 7.06352215, 7.16449517], dtype=torch.float32, device="cuda")
 
     def __init__(self, num_envs, device="cuda", freq=200):
-        _can_opener = open("controller.yaml", "r")
+        _can_opener = open("include/controller.yaml", "r")
         _controller_params = yaml.safe_load(_can_opener)
 
         self.thrust = torch.zeros([num_envs, 4], dtype=torch.float32, device=device)

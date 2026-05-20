@@ -24,7 +24,8 @@ from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.sensors import ImuCfg, Imu
 
 from pxr import Gf
-from Kxontroller import Kxontroller
+from include.Kxontroller import Kxontroller
+from include.Planner import Planner
 
 class Drone():
     drone_cfg = ArticulationCfg(
@@ -36,8 +37,8 @@ class Drone():
 
     imu_cfg = ImuCfg(
             prim_path="{ENV_REGEX_NS}/drone/base_link",
-            update_period=0.0,
-            history_length=0,
+            update_period=1.0/800.0,
+            history_length=10,
             debug_vis=False
             )
 
@@ -50,8 +51,8 @@ class Drone():
 
         self.setpoint = torch.zeros(num_envs, 3, device=device)
 
-        for sp in self.setpoint:
-            sp[:] = torch.tensor([0.0, 0.0, 2.0], device=device)
+        #for sp in self.setpoint:
+        #    sp[:] = torch.tensor([0.0, 0.0, 2.0], device=device)
 
 class DataWriter():
     def __init__(self, path="dataset/patient_one_data.zarr/", num_batch=10, seq_len=10, n_dim=25):
@@ -100,13 +101,13 @@ class DroneSceneCfg(InteractiveSceneCfg):
 
 @configclass
 class DroneEnvCfg(DirectRLEnvCfg):
-    episode_length_s = 2.5
+    episode_length_s = 8.0
     decimation = 1
     action_space = 4
     observation_space = 6
     state_space = 0
     debug_vis = False
-    dt = 1.0/200.0
+    dt = 1.0/800.0
     
     ui_window_class_type = DroneEnvWindow
 
@@ -138,7 +139,7 @@ class DroneEnvCfg(DirectRLEnvCfg):
 
     scene: InteractiveSceneCfg = DroneSceneCfg(
         num_envs=2, 
-        env_spacing=2.0, 
+        env_spacing=0.0, 
         replicate_physics=True,
     )
 
@@ -147,12 +148,20 @@ class DroneEnv(DirectRLEnv):
     cfg: DroneEnvCfg
 
     def __init__(self, cfg: DroneEnvCfg, render_mode: str | None = None, **kwargs):
-        #super().__init__(cfg, render_mode, **kwargs)
-        super().__init__(cfg, render_mode=None, **kwargs)
+        #super().__init__(cfg, render_mode=None, **kwargs)
+        super().__init__(cfg, render_mode, **kwargs)
+
+        #mission planner
+        self.bezier = Planner.random(
+                M=self.scene.num_envs, 
+                N=5, 
+                low=-3.0, 
+                high=3.0, 
+                device="cuda")
 
         #data writer
         self.n_dim = 26
-        self.max_iter = 2000
+        self.max_iter = 200
         self.seq_len = int(self.cfg.episode_length_s / self.cfg.sim.dt)
         self.writer = DataWriter(num_batch=self.max_iter, seq_len=self.seq_len, n_dim=self.n_dim)
         self.t1 = 1.0
@@ -162,6 +171,13 @@ class DroneEnv(DirectRLEnv):
         self.data = torch.zeros(self.scene.num_envs, self.seq_len, self.n_dim, device="cuda")
         self.step_idx = torch.zeros(self.scene.num_envs, dtype=torch.long, device="cpu")
         self.drone.rotor_ids = self.scene.articulations["drone"].find_bodies("rotor_[1-4]")
+        self.loop_counter = 1
+        self.sampling_freq = 200.0
+
+        #state covariances
+        #self.sigma_pos = 1e-5
+        #self.sigma_vel = 1e-5
+        #self.sigma_rot = 1e-5
 
     def _setup_scene(self):
         self.drone = Drone(self.scene.cfg.num_envs)
@@ -181,8 +197,11 @@ class DroneEnv(DirectRLEnv):
 
     def _pre_physics_step(self, actions: torch.Tensor):
         self._actions = actions.clone()
-
-        self.drone.controller.step(desired_states=self.drone.setpoint, states=self.scene.articulations["drone"].data.root_com_state_w, dt=self.cfg.sim.dt)
+        
+        if self.loop_counter % (self.cfg.sim.dt * self.sampling_freq) == 0:
+            _sp = self.bezier.step(self.scene.articulations["drone"].data.root_com_pos_w, mode="pos")
+            self.drone.setpoint = _sp
+            self.drone.controller.step(desired_states=self.drone.setpoint, states=self.scene.articulations["drone"].data.root_com_state_w, dt=self.cfg.sim.dt)
 
     def _apply_action(self):
         self.scene.articulations["drone"].set_external_force_and_torque(
@@ -195,62 +214,76 @@ class DroneEnv(DirectRLEnv):
     def _get_observations(self) -> dict:
         observations = {}
 
-        drone_data = self.scene.articulations["drone"].data
-        imu_data = self.scene.sensors["imu"].data
-
-        pos = drone_data.root_com_pos_w                      # (N, 3)
-        quat = drone_data.root_com_quat_w                    # (N, 4) [w, x, y, z]
-        lin_vel = drone_data.root_com_lin_vel_b              # (N, 3)
-        ang_vel = drone_data.root_com_ang_vel_b              # (N, 3)
-
-        w, x, y, z = quat.unbind(dim=1)
-
-        R = torch.stack([
-            torch.stack([1 - 2*(y*y + z*z), 2*(x*y - z*w),     2*(x*z + y*w)], dim=1),
-            torch.stack([2*(x*y + z*w),     1 - 2*(x*x + z*z), 2*(y*z - x*w)], dim=1),
-            torch.stack([2*(x*z - y*w),     2*(y*z + x*w),     1 - 2*(x*x + y*y)], dim=1)
-        ], dim=1)
-
-        R_T = R.transpose(1, 2)
-
-        local_lin_vel = torch.bmm(R_T, lin_vel.unsqueeze(-1)).squeeze(-1)
-        local_ang_vel = torch.bmm(R_T, ang_vel.unsqueeze(-1)).squeeze(-1)
-
-        sinr_cosp = 2 * (w * x + y * z)
-        cosr_cosp = 1 - 2 * (x * x + y * y)
-        roll = torch.atan2(sinr_cosp, cosr_cosp)
-
-        sinp = 2 * (w * y - z * x)
-        pitch = torch.where(
-            torch.abs(sinp) >= 1,
-            torch.sign(sinp) * (torch.pi / 2),
-            torch.asin(sinp)
-        )
-
-        siny_cosp = 2 * (w * z + x * y)
-        cosy_cosp = 1 - 2 * (y * y + z * z)
-        yaw = torch.atan2(siny_cosp, cosy_cosp)
-
-        rot = torch.stack([roll, pitch, yaw], dim=1)  # (N, 3)
-
+        self.loop_counter += 1
         env_timestamp = self.episode_length_buf.reshape(self.episode_length_buf.shape[0], 1) * self.cfg.sim.dt
-        obs = torch.cat([
-            pos,
-            local_lin_vel,
-            rot,
-            local_ang_vel,
-            imu_data.lin_acc_b,
-            imu_data.ang_vel_b,
-            self.drone.controller.thrust,
-            self.drone.setpoint,
-            env_timestamp
-        ], dim=1)  # (N, dim)
 
-        valid = self.step_idx < self.seq_len  # (N,)
-        idx = self.step_idx[valid]
+        if self.loop_counter % (self.cfg.sim.dt * self.sampling_freq) == 0:
+            drone_data = self.scene.articulations["drone"].data
+            imu_data = self.scene.sensors["imu"].data
 
-        self.data[valid, idx] = obs[valid]
-        self.step_idx[valid] += 1
+            pos = drone_data.root_com_pos_w                      # (N, 3)
+            quat = drone_data.root_com_quat_w                    # (N, 4) [w, x, y, z]
+            lin_vel = drone_data.root_com_lin_vel_b              # (N, 3)
+            ang_vel = drone_data.root_com_ang_vel_b              # (N, 3)
+
+            w, x, y, z = quat.unbind(dim=1)
+
+            R = torch.stack([
+                torch.stack([1 - 2*(y*y + z*z), 2*(x*y - z*w),     2*(x*z + y*w)], dim=1),
+                torch.stack([2*(x*y + z*w),     1 - 2*(x*x + z*z), 2*(y*z - x*w)], dim=1),
+                torch.stack([2*(x*z - y*w),     2*(y*z + x*w),     1 - 2*(x*x + y*y)], dim=1)
+            ], dim=1)
+
+            R_T = R.transpose(1, 2)
+
+            local_lin_vel = torch.bmm(R_T, lin_vel.unsqueeze(-1)).squeeze(-1)
+            local_ang_vel = torch.bmm(R_T, ang_vel.unsqueeze(-1)).squeeze(-1)
+
+            sinr_cosp = 2 * (w * x + y * z)
+            cosr_cosp = 1 - 2 * (x * x + y * y)
+            roll = torch.atan2(sinr_cosp, cosr_cosp)
+
+            sinp = 2 * (w * y - z * x)
+            pitch = torch.where(
+                torch.abs(sinp) >= 1,
+                torch.sign(sinp) * (torch.pi / 2),
+                torch.asin(sinp)
+            )
+
+            siny_cosp = 2 * (w * z + x * y)
+            cosy_cosp = 1 - 2 * (y * y + z * z)
+            yaw = torch.atan2(siny_cosp, cosy_cosp)
+
+            rot = torch.stack([roll, pitch, yaw], dim=1)  # (N, 3)
+
+            #perhaps noise only in post-processing?
+            #noisy_pos = pos + torch.randn_like(pos) * self.sigma_pos
+            #noisy_local_lin_vel = local_lin_vel + torch.randn_like(local_lin_vel) * self.sigma_vel
+            #noisy_rot = rot + torch.randn_like(rot) * self.sigma_rot
+
+            #N = noisy_pos.shape[0]
+            #sigma_pos = torch.full((N, 1), self.sigma_pos, device=noisy_pos.device)
+            #sigma_vel = torch.full((N, 1), self.sigma_vel, device=noisy_pos.device)
+            #sigma_rot = torch.full((N, 1), self.sigma_rot, device=noisy_pos.device)
+
+            #env_timestamp = self.episode_length_buf.reshape(self.episode_length_buf.shape[0], 1) * self.cfg.sim.dt
+            obs = torch.cat([
+                pos,
+                local_lin_vel,
+                rot,
+                local_ang_vel,
+                imu_data.lin_acc_b,
+                imu_data.ang_vel_b,
+                self.drone.controller.thrust,
+                self.drone.setpoint,
+                env_timestamp,
+            ], dim=1)  # (N, dim)
+
+            valid = self.step_idx < self.seq_len  # (N,)
+            idx = self.step_idx[valid]
+
+            self.data[valid, idx] = obs[valid]
+            self.step_idx[valid] += 1
 
         return observations
 
@@ -304,19 +337,19 @@ class DroneEnv(DirectRLEnv):
         ], dim=1)
 
         # --- LINEAR VELOCITY RANDOMIZATION ---
-        lin_vel_noise = torch.empty((len(env_ids), 3), device=self.device).uniform_(-2.0, 2.0)
+        lin_vel_noise = torch.empty((len(env_ids), 3), device=self.device).uniform_(-0.1, 0.1)
         root_state[:, 7:10] = lin_vel_noise
 
         # --- ANGULAR VELOCITY RANDOMIZATION ---
-        ang_vel_noise = torch.empty((len(env_ids), 3), device=self.device).uniform_(-0.1, 0.1)
+        ang_vel_noise = torch.empty((len(env_ids), 3), device=self.device).uniform_(-0.01, 0.01)
         root_state[:, 10:13] = ang_vel_noise
 
         # --- JOINT RANDOMIZATION (rotors) ---
-        joint_vel_noise = torch.empty_like(joint_vel).uniform_(-0.1, 0.1)
+        joint_vel_noise = torch.empty_like(joint_vel).uniform_(-0.02, 0.02)
         joint_vel += joint_vel_noise
 
         # (optional) small position noise if joints have meaningful angles
-        joint_pos_noise = torch.empty_like(joint_pos).uniform_(-0.1, 0.1)
+        joint_pos_noise = torch.empty_like(joint_pos).uniform_(-0.02, 0.02)
         joint_pos += joint_pos_noise
 
         # --- WRITE TO SIM ---
@@ -337,7 +370,12 @@ class DroneEnv(DirectRLEnv):
         base_pos = self._terrain.env_origins[env_ids]
 
         # final setpoint = relative to spawn
-        self.drone.setpoint[env_ids] = base_pos + offset
+        #self.drone.setpoint[env_ids] = base_pos + offset
+        self.bezier = Planner.random(M=self.scene.num_envs, N=5, low=-3.0, high=3.0, device="cuda")
+
+        # random noise covariance
+        #_temp_sigma = torch.empty((3), device=self.device).uniform_(1e-6, 1e-5)
+        #self.sigma_pos, self.sigma_vel, self.sigma_rot = _temp_sigma
 
         for i in env_ids:
             if self.step_idx[i] < self.seq_len:

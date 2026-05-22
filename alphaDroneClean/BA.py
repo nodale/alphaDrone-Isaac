@@ -51,9 +51,6 @@ class Drone():
 
         self.setpoint = torch.zeros(num_envs, 3, device=device)
 
-        #for sp in self.setpoint:
-        #    sp[:] = torch.tensor([0.0, 0.0, 2.0], device=device)
-
 class DataWriter():
     def __init__(self, path="dataset/patient_one_data.zarr/", num_batch=10, seq_len=10, n_dim=25):
         self.path = path
@@ -139,7 +136,7 @@ class DroneEnvCfg(DirectRLEnvCfg):
 
     scene: InteractiveSceneCfg = DroneSceneCfg(
         num_envs=2, 
-        env_spacing=0.0, 
+        env_spacing=4.0, 
         replicate_physics=True,
     )
 
@@ -150,14 +147,6 @@ class DroneEnv(DirectRLEnv):
     def __init__(self, cfg: DroneEnvCfg, render_mode: str | None = None, **kwargs):
         #super().__init__(cfg, render_mode=None, **kwargs)
         super().__init__(cfg, render_mode, **kwargs)
-
-        #mission planner
-        self.bezier = Planner.random(
-                M=self.scene.num_envs, 
-                N=5, 
-                low=-3.0, 
-                high=3.0, 
-                device="cuda")
 
         #data writer
         self.n_dim = 26
@@ -174,10 +163,17 @@ class DroneEnv(DirectRLEnv):
         self.loop_counter = 1
         self.sampling_freq = 200.0
 
-        #state covariances
-        #self.sigma_pos = 1e-5
-        #self.sigma_vel = 1e-5
-        #self.sigma_rot = 1e-5
+        #mission planner
+        self.bezier = Planner.random(
+                M=self.scene.num_envs, 
+                N=5, 
+                low=-3.0, 
+                high=3.0,
+                seed=0,
+                offset=self.scene.articulations["drone"].data.root_com_pos_w,
+                device="cuda")
+
+        print(self.scene.articulations["drone"].data.default_root_state[:, :3])
 
     def _setup_scene(self):
         self.drone = Drone(self.scene.cfg.num_envs)
@@ -197,7 +193,7 @@ class DroneEnv(DirectRLEnv):
 
     def _pre_physics_step(self, actions: torch.Tensor):
         self._actions = actions.clone()
-        
+
         if self.loop_counter % (self.cfg.sim.dt * self.sampling_freq) == 0:
             _sp = self.bezier.step(self.scene.articulations["drone"].data.root_com_pos_w, mode="pos")
             self.drone.setpoint = _sp
@@ -255,16 +251,6 @@ class DroneEnv(DirectRLEnv):
             yaw = torch.atan2(siny_cosp, cosy_cosp)
 
             rot = torch.stack([roll, pitch, yaw], dim=1)  # (N, 3)
-
-            #perhaps noise only in post-processing?
-            #noisy_pos = pos + torch.randn_like(pos) * self.sigma_pos
-            #noisy_local_lin_vel = local_lin_vel + torch.randn_like(local_lin_vel) * self.sigma_vel
-            #noisy_rot = rot + torch.randn_like(rot) * self.sigma_rot
-
-            #N = noisy_pos.shape[0]
-            #sigma_pos = torch.full((N, 1), self.sigma_pos, device=noisy_pos.device)
-            #sigma_vel = torch.full((N, 1), self.sigma_vel, device=noisy_pos.device)
-            #sigma_rot = torch.full((N, 1), self.sigma_rot, device=noisy_pos.device)
 
             #env_timestamp = self.episode_length_buf.reshape(self.episode_length_buf.shape[0], 1) * self.cfg.sim.dt
             obs = torch.cat([
@@ -370,12 +356,14 @@ class DroneEnv(DirectRLEnv):
         base_pos = self._terrain.env_origins[env_ids]
 
         # final setpoint = relative to spawn
-        #self.drone.setpoint[env_ids] = base_pos + offset
-        self.bezier = Planner.random(M=self.scene.num_envs, N=5, low=-3.0, high=3.0, device="cuda")
-
-        # random noise covariance
-        #_temp_sigma = torch.empty((3), device=self.device).uniform_(1e-6, 1e-5)
-        #self.sigma_pos, self.sigma_vel, self.sigma_rot = _temp_sigma
+        self.bezier = Planner.random(
+                M=self.scene.num_envs, 
+                N=5, 
+                low=-3.0, 
+                high=3.0,
+                seed=0,
+                offset=self.scene.articulations["drone"].data.root_com_pos_w,
+                device="cuda")
 
         for i in env_ids:
             if self.step_idx[i] < self.seq_len:

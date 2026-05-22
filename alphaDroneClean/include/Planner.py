@@ -23,11 +23,26 @@ class Planner:
         )
 
     @staticmethod
-    def random(M, N, low=0.0, high=1.0, device=None, dtype=torch.float32):
+    def random(M, N, offset, low=0.0, high=1.0, device=None, dtype=torch.float32, seed=0):
+        generator = torch.Generator(device="cuda")
+        generator.manual_seed(seed)
+
         low = torch.tensor([low, low, 0.5], device=device, dtype=dtype)
         high = torch.tensor([high, high, 1.5], device=device, dtype=dtype)
 
-        ctrl = (high - low) * torch.rand((M, N, 3), device=device, dtype=dtype) + low
+        ctrl = (high - low) * torch.rand((M, N, 3), generator=generator, device=device, dtype=dtype) + low
+
+        ctrl[:, 0, :2] = torch.tensor(
+                [0.0, 0.0],
+                device=device,
+                dtype=dtype,
+            )
+
+        if offset != None:
+            ctrl = ctrl + offset.unsqueeze(1)
+
+        print(ctrl)
+
         return Planner(ctrl, device=device, dtype=dtype)
 
     def _basis(self, t):
@@ -91,10 +106,10 @@ class Planner:
         return self.point(t)
 
 def main():
-    bz = Planner.random(M=8, N=5, low=-5, high=5)
-    out = bz.step(current_pos, mode="pos_vel")
-    pos_setpoints = out.get("pos")
-    vel_setpoints = out.get("vel")
+    bz = Planner.random(M=8, N=5, low=-5, high=5, seed=0, device="cuda")
+    #out = bz.step(current_pos, mode="pos_vel")
+    #pos_setpoints = out.get("pos")
+    #vel_setpoints = out.get("vel")
 
 
 if __name__ == "__main__":

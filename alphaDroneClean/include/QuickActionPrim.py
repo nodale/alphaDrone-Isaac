@@ -1,6 +1,8 @@
+# TBD
+
 import torch
 
-class Planner:
+class ActionPrim:
     def __init__(self, ctrl, device=None, dtype=torch.float32):
         """
         ctrl: (M, N, 3) control points per environment
@@ -27,13 +29,10 @@ class Planner:
         generator = torch.Generator(device="cuda")
         generator.manual_seed(seed)
 
-        low = torch.tensor([0.0, low, 0.5], device=device, dtype=dtype)
+        low = torch.tensor([low, low, 0.5], device=device, dtype=dtype)
         high = torch.tensor([high, high, 1.5], device=device, dtype=dtype)
 
         ctrl = (high - low) * torch.rand((M, N, 3), generator=generator, device=device, dtype=dtype) + low
-
-        idx = torch.argsort(ctrl[:, :, 0], dim=1)
-        ctrl = torch.gather(ctrl, 1, idx.unsqueeze(-1).expand(-1, -1, 3))
 
         ctrl[:, 0, :2] = torch.tensor(
                 [0.0, 0.0],

@@ -23,7 +23,7 @@ class Planner:
         )
 
     @staticmethod
-    def random(M=1, N=3, offset=None, low=-3.0, high=3.0, device=None, dtype=torch.float32, seed=0):
+    def random(M=1, N=3, offset=None, low=-3.00, high=3.00, device=None, dtype=torch.float32, seed=0):
         generator = torch.Generator(device=device if device is not None else "cpu")
         generator.manual_seed(seed)
 

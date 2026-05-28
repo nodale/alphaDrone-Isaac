@@ -30,14 +30,14 @@ from include.Planner import Planner
 class Drone():
     drone_cfg = ArticulationCfg(
             prim_path="{ENV_REGEX_NS}/drone",
-            spawn=sim_utils.UsdFileCfg(usd_path="drone/test9.usda"),
+            spawn=sim_utils.UsdFileCfg(usd_path="fly_boy/fly_boy.usda"),
             actuators={"rotors": ImplicitActuatorCfg(joint_names_expr=["rotor_[1-4]_joint"], damping=None, stiffness=None)},
             init_state=ArticulationCfg.InitialStateCfg(pos=[0.0, 0.0, 0.2])
             )   
 
     imu_cfg = ImuCfg(
             prim_path="{ENV_REGEX_NS}/drone/base_link",
-            update_period=1.0/800.0,
+            update_period=1.0/200.0,
             history_length=2,
             debug_vis=False
             )
@@ -98,13 +98,13 @@ class DroneSceneCfg(InteractiveSceneCfg):
 
 @configclass
 class DroneEnvCfg(DirectRLEnvCfg):
-    episode_length_s = 4.0
+    episode_length_s = 8.0
     decimation = 1
     action_space = 4
     observation_space = 6
     state_space = 0
     debug_vis = False
-    dt = 1.0/800.0
+    dt = 1.0/200.0
     
     ui_window_class_type = DroneEnvWindow
 
@@ -188,11 +188,64 @@ class DroneEnv(DirectRLEnv):
 
     def _pre_physics_step(self, actions: torch.Tensor):
         self._actions = actions.clone()
+        self.loop_counter += 1
+        env_timestamp = self.episode_length_buf.reshape(self.episode_length_buf.shape[0], 1) * self.cfg.sim.dt
 
         if self.loop_counter % (self.cfg.sim.dt * self.sampling_freq) == 0:
             _sp = self.bezier.step(self.scene.articulations["drone"].data.root_com_pos_w, dt=self.cfg.sim.dt ,mode="pos")
             self.drone.setpoint = _sp
-            self.drone.controller.step(desired_states=self.drone.setpoint, states=self.scene.articulations["drone"].data.root_com_state_w, dt=self.cfg.sim.dt)
+
+            drone_data = self.scene.articulations["drone"].data
+            imu_data = self.scene.sensors["imu"].data
+
+            acc =  imu_data.lin_acc_b.detach().clone()
+            gyro =  imu_data.ang_vel_b.detach().clone()
+            pos = drone_data.root_com_pos_w.detach().clone()                      # (N, 3)
+            quat = drone_data.root_com_quat_w.detach().clone()                    # (N, 4) [w, x, y, z]
+            lin_vel = drone_data.root_com_lin_vel_b.detach().clone()              # (N, 3)
+            ang_vel = drone_data.root_com_ang_vel_b.detach().clone()              # (N, 3)
+            setpoint = _sp.detach().clone()
+
+            w, x, y, z = quat.unbind(dim=1)
+            quat_frd = torch.stack([
+                w,
+                x,
+                -y,
+                -z
+            ], dim=1)
+
+            #transforming the data to PX4 orientation
+            pos[:, 1:] *= -1.0
+            lin_vel[:, 1:] *= -1.0
+            ang_vel[:, 1:] *= -1.0
+            acc[:, 1:] *= -1.0
+            gyro[:, 1:] *= -1.0
+            setpoint[:, 1:] *= -1.0            
+
+            obs = torch.cat([
+                pos,
+                lin_vel,
+                quat_frd,
+                ang_vel,
+                acc,
+                gyro,
+                self.drone.controller.thrust,
+                setpoint,
+                env_timestamp,
+            ], dim=1)  # (N, dim)
+
+            valid = self.step_idx < self.seq_len  # (N,)
+            idx = self.step_idx[valid]
+
+            self.data[valid, idx] = obs[valid]
+            self.step_idx[valid] += 1
+
+            #setpoint = torch.tensor([[
+            #    0.0, 0.0, -1.0]], device="cuda")
+            self.drone.controller.step(desired_pos=setpoint, states=obs[:, :13], dt=1.0/self.sampling_freq)
+            #self.scene.articulations["drone"].data.root_com_state_w
+
+            #print(self.drone.controller.ve_thrust[0, :], setpoint[0, :], obs[:, :13])
 
     def _apply_action(self):
         self.scene.articulations["drone"].set_external_force_and_torque(
@@ -204,59 +257,6 @@ class DroneEnv(DirectRLEnv):
 
     def _get_observations(self) -> dict:
         observations = {}
-
-        self.loop_counter += 1
-        env_timestamp = self.episode_length_buf.reshape(self.episode_length_buf.shape[0], 1) * self.cfg.sim.dt
-
-        if self.loop_counter % (self.cfg.sim.dt * self.sampling_freq) == 0:
-            drone_data = self.scene.articulations["drone"].data
-            imu_data = self.scene.sensors["imu"].data
-
-            pos = drone_data.root_com_pos_w.detach().clone()                      # (N, 3)
-            quat = drone_data.root_com_quat_w.detach().clone()                    # (N, 4) [w, x, y, z]
-            lin_vel = drone_data.root_com_lin_vel_b.detach().clone()              # (N, 3)
-            ang_vel = drone_data.root_com_ang_vel_b.detach().clone()              # (N, 3)
-
-            w, x, y, z = quat.unbind(dim=1)
-
-
-            R = torch.stack([
-                torch.stack([1 - 2*(y*y + z*z), 2*(x*y - z*w),     2*(x*z + y*w)], dim=1),
-                torch.stack([2*(x*y + z*w),     1 - 2*(x*x + z*z), 2*(y*z - x*w)], dim=1),
-                torch.stack([2*(x*z - y*w),     2*(y*z + x*w),     1 - 2*(x*x + y*y)], dim=1)
-            ], dim=1)
-
-            R_T = R.transpose(1, 2)
-
-            #transforming the data to PX4 orientation
-            pos[:, 1:] = pos[:, 1:] * -1.0
-            quat[:, 2:] = quat[:, 2:] * -1.0
-            lin_vel[:, 1:] = lin_vel[:, 1:] * -1.0
-            ang_vel[:, 1:] = ang_vel[:, 1:] * -1.0
-            setpoint = self.drone.setpoint.detach().clone()
-            setpoint[:, 1:] = setpoint[:, 1:] * -1.0
-            acc =  imu_data.lin_acc_b.detach().clone()
-            acc[:, 1:] = acc[:, 1:] * -1.0
-            gyro = imu_data.ang_vel_b
-            gyro[:, 1:] = gyro[:, 1:] * -1.0
-            
-            obs = torch.cat([
-                pos,
-                lin_vel,
-                quat,
-                ang_vel,
-                imu_data.lin_acc_b,
-                imu_data.ang_vel_b,
-                self.drone.controller.thrust,
-                self.drone.setpoint,
-                env_timestamp,
-            ], dim=1)  # (N, dim)
-
-            valid = self.step_idx < self.seq_len  # (N,)
-            idx = self.step_idx[valid]
-
-            self.data[valid, idx] = obs[valid]
-            self.step_idx[valid] += 1
 
         return observations
 

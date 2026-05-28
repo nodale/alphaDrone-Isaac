@@ -1,173 +1,238 @@
-import torch as torch
-import numpy as np
-
 import yaml
-from pxr import Gf
+import torch
+
+@torch.jit.script
+def quat_to_euler_xyz(q: torch.Tensor) -> torch.Tensor:
+    w = q[..., 0]
+    x = q[..., 1]
+    y = q[..., 2]
+    z = q[..., 3]
+
+    sinr_cosp = 2.0 * (w * x + y * z)
+    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+    roll = torch.atan2(sinr_cosp, cosr_cosp)
+
+    sinp = 2.0 * (w * y - z * x)
+    sinp = torch.clamp(sinp, -1.0, 1.0)
+    pitch = torch.asin(sinp)
+
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    yaw = torch.atan2(siny_cosp, cosy_cosp)
+
+    return torch.stack((roll, pitch, yaw), dim=-1)
+
 
 class Kilter:
-    device = "cuda"
-    Q : torch.eye = torch.eye(12, dtype=torch.float32, device=device)
-    P : torch.eye = torch.eye(12, dtype=torch.float32, device=device)
-    R : torch.eye = torch.eye(12, dtype=torch.float32, device=device)
-    H : torch.eye = torch.eye(12, dtype=torch.float32, device=device)
-    K : torch.eye = torch.eye(12, dtype=torch.float32, device=device)
-    state_p : torch.tensor = torch.zeros((12,1), dtype=torch.float32, device=device)
-    state_e : torch.tensor = torch.zeros((12,1), dtype=torch.float32, device=device)
 
-    def __init__(self):
-        #to init A_d and B_d and U_k
-        _can_opener = open("include/controller.yaml", "r")
-        _controller_params = yaml.safe_load(_can_opener)
-        self.K = torch.tensor(_controller_params['K'], dtype=torch.float32,     device="cuda")
-        self.A_d = torch.tensor(_controller_params['A_d'], dtype=torch.float32, device="cuda")
-        self.B_d = torch.tensor(_controller_params['B_d'], dtype=torch.float32, device="cuda")
+    def __init__(self, num_envs, device="cuda"):
 
-        self.Q = torch.eye(12, dtype=torch.float32, device="cuda") * 1e-3
-        self.R = torch.eye(12, dtype=torch.float32, device="cuda") * 1e-3
+        with open("include/controller.yaml", "r") as f:
+            params = yaml.safe_load(f)
 
+        self.device = device
+        self.num_envs = num_envs
+
+        self.A_d = torch.tensor(
+            params["A_d"],
+            dtype=torch.float32,
+            device=device
+        )
+
+        self.B_d = torch.tensor(
+            params["B_d"],
+            dtype=torch.float32,
+            device=device
+        )
+
+        self.H = torch.eye(
+            12,
+            dtype=torch.float32,
+            device=device
+        )
+
+        self.Q = (
+            torch.eye(12, device=device, dtype=torch.float32)
+            * 1e-3
+        )
+
+        self.R = (
+            torch.eye(12, device=device, dtype=torch.float32)
+            * 1e-3
+        )
+
+        self.P = torch.eye(
+            12,
+            device=device,
+            dtype=torch.float32
+        ).expand(num_envs, 12, 12).clone()
+
+        self.state_p = torch.zeros(
+            (num_envs, 12),
+            dtype=torch.float32,
+            device=device
+        )
+
+    @torch.no_grad()
     def update(self, state, u):
-        _u = u.view(-1, 1)
-        self.state_e = self.A_d @ self.state_p + self.B_d @ _u
-        self.P = self.A_d @ self.P @ self.A_d.t() + self.Q
-        self.K  = self.P @ self.H.t() @ torch.inverse(self.H @ self.P @ self.H.t() + self.R)
-        self.state_p = self.state_e + self.K @ (state - self.H @ self.state_e)
-        self.P = (torch.eye(12, dtype=torch.float32, device="cuda") - self.K @ self.H) @ self.P
+        state_e = (
+            torch.matmul(self.state_p, self.A_d.T)
+            + torch.matmul(u, self.B_d.T)
+        )
+
+        AP = torch.matmul(self.A_d, self.P)
+        self.P = torch.matmul(AP, self.A_d.T) + self.Q
+
+        S = torch.matmul(
+            self.H,
+            torch.matmul(self.P, self.H.T)
+        ) + self.R
+
+        K = torch.linalg.solve(
+            S,
+            torch.matmul(self.H, self.P).transpose(-1, -2)
+        ).transpose(-1, -2)
+
+        innovation = state - torch.matmul(state_e, self.H.T)
+
+        self.state_p = state_e + torch.matmul(
+            K,
+            innovation.unsqueeze(-1)
+        ).squeeze(-1)
+
+        I = torch.eye(
+            12,
+            device=self.device,
+            dtype=torch.float32
+        )
+
+        self.P = torch.matmul(
+            I - torch.matmul(K, self.H),
+            self.P
+        )
 
 
 class Kxontroller:
-    time_summer : float = 0.0
-    lqr_status: float = 0.0
-    move_status: float = 0.0
-    u_eq: torch.tensor = torch.tensor([7.43987615, 7.33890313, 7.06352215, 7.16449517], dtype=torch.float32, device="cuda")
 
-    def __init__(self, num_envs, device="cuda", freq=200):
-        _can_opener = open("include/controller.yaml", "r")
-        _controller_params = yaml.safe_load(_can_opener)
+    def __init__(
+        self,
+        num_envs,
+        device="cuda",
+        freq=200
+    ):
 
-        self.thrust = torch.zeros([num_envs, 4], dtype=torch.float32, device=device)
-        self.ve_thrust = torch.zeros([num_envs, 4, 3], dtype=torch.float32, device=device)
-        self.ve_moment = torch.zeros([num_envs, 4, 3], dtype=torch.float32, device=device)
+        with open("include/controller.yaml", "r") as f:
+            params = yaml.safe_load(f)
 
-        self.K = torch.tensor(_controller_params['K_MOVE'], dtype=torch.float32, device=device)
-        self.P = torch.tensor(_controller_params['P_LQR'], dtype=torch.float32, device=device)
-
-        self.K_LQR = torch.tensor(_controller_params['K_MOVE'], dtype=torch.float32, device=device)
-        self.P_LQR = torch.tensor(_controller_params['P_LQR'], dtype=torch.float32, device=device)
-
-
-        self.K_MOVE = torch.tensor(_controller_params['K_MOVE'], dtype=torch.float32, device=device)
-        self.P_MOVE = torch.tensor(_controller_params['P_MOVE'], dtype=torch.float32, device=device)
-
-        self.kilter = Kilter()
+        self.device = device
+        self.num_envs = num_envs
 
         self.control_dt = 1.0 / freq
         self.time_summer = 0.0
-        self.device = device
 
-    def step(self, desired_states, states, dt):
+        self.K = torch.tensor(
+            params["K_LQR"],
+            dtype=torch.float32,
+            device=device
+        )
+
+        self.P_LQR = torch.tensor(
+            params["P_LQR"],
+            dtype=torch.float32,
+            device=device
+        )
+
+        self.u_eq = torch.tensor(
+            [
+                9.00545894,
+                8.9619036,
+                8.68197106,
+                8.7255264
+            ],
+            dtype=torch.float32,
+            device=device
+        )
+
+        self.thrust = torch.zeros(
+            (num_envs, 4),
+            dtype=torch.float32,
+            device=device
+        )
+
+        self.ve_thrust = torch.zeros(
+            (num_envs, 4, 3),
+            dtype=torch.float32,
+            device=device
+        )
+
+        self.ve_moment = torch.zeros(
+            (num_envs, 4, 3),
+            dtype=torch.float32,
+            device=device
+        )
+
+        self.kilter = Kilter(
+            num_envs=num_envs,
+            device=device
+        )
+
+    @torch.no_grad()
+    def step(self, desired_pos, states, dt):
         self.time_summer += dt
-        if self.time_summer >= self.control_dt:
-            self.time_summer = 0.0
 
-            for env, sp, thrust in zip(states, desired_states, self.thrust):
-                _pre_rot = Gf.Quatd(
-                        float(env[3]),
-                    Gf.Vec3d(
-                        float(env[4]),
-                        float(env[5]),
-                        float(env[6])
-                    )
-                )
-                _gf_rot = Gf.Rotation(_pre_rot) 
-                _rot = _gf_rot.Decompose(Gf.Vec3d(1, 0, 0), Gf.Vec3d(0, 1, 0), Gf.Vec3d(0, 0, 1))
-                rot = np.array([_rot[0] * 0.0174532925, _rot[1] * 0.0174532925, _rot[2] * 0.0174532925])
-                
-                _temp_out = self.update(
-                        desired_pos=sp, 
-                        current_pos=env[0:3], 
-                        current_vel=env[7:10], 
-                        current_att=rot, 
-                        current_ang_vel=env[10:13],
-                        thrust=thrust
-                        )
+        if self.time_summer < self.control_dt:
+            return
 
-                thrust.copy_(_temp_out)
-            
-        else:
-            self.thrust = self.thrust
+        self.time_summer = 0.0
 
+        pos = states[:, 0:3]
+        vel = states[:, 3:6]
+        quat = states[:, 6:10]
+        ang_vel = states[:, 10:13]
 
+        att = quat_to_euler_xyz(quat)
+
+        state = torch.cat(
+            (pos, vel, att, ang_vel),
+            dim=-1
+        )
+
+        self.kilter.update(state, self.thrust)
+
+        state_offset = torch.cat(
+            (
+                desired_pos - pos,
+                -vel,
+                -att,
+                -ang_vel
+            ),
+            dim=-1
+        )
+
+        # x^T P x
+        lqr_status = torch.einsum(
+            "bi,ij,bj->b",
+            state_offset,
+            self.P_LQR,
+            state_offset
+        )
+
+        control = (
+            self.u_eq.unsqueeze(0)
+            - torch.matmul(state_offset, self.K.T)
+        )
+
+        self.thrust.copy_(control)
+
+        self.thrust.clamp_(
+            min=0.0,
+            max=13.25
+        )
+        self.ve_thrust.zero_()
         self.ve_thrust[:, :, 2] = self.thrust
+
+        self.ve_moment.zero_()
         self.ve_moment[:, :, 2] = self.thrust * 0.09
-        self.ve_moment[:, 1, 2] *= -1
-        self.ve_moment[:, 3, 2] *= -1
 
-    def update(self, desired_pos, current_pos, current_vel, current_att, current_ang_vel, thrust):
-
-        def to_tensor(x):
-            if isinstance(x, torch.Tensor):
-                return x.to(self.device).float()
-            elif isinstance(x, np.ndarray):
-                return torch.from_numpy(x).to(self.device).float()
-            elif isinstance(x, (float, int)):
-                return torch.tensor([x], dtype=torch.float32, device=self.device)
-            elif isinstance(x, (list, tuple)):
-                return torch.tensor(x, dtype=torch.float32, device=self.device)
-            else:
-                raise TypeError(f"Unsupported type for tensor conversion: {type(x)}")
-
-
-        desired_pos = to_tensor(desired_pos).flatten()
-        current_pos = to_tensor(current_pos).flatten()
-        current_vel = to_tensor(current_vel).flatten()
-        current_att = to_tensor(current_att).flatten()
-        current_ang_vel = to_tensor(current_ang_vel).flatten()
-
-
-        _state = torch.cat(
-                (
-                    current_pos,
-                    current_vel,
-                    current_att,
-                    current_ang_vel
-                    )
-                )
-
-        self.kilter.update(_state, thrust)
-
-        _p_state_offset = torch.cat(
-                (
-                    (current_pos - desired_pos),
-                    current_vel,
-                    current_att,
-                    current_ang_vel
-                    )
-                )
-
-        _state_offset = torch.cat(
-                (
-                    (current_pos - desired_pos),
-                    current_vel,
-                    current_att,
-                    current_ang_vel
-                    )
-                )
-
-        current_state = to_tensor(_state).flatten()
-        current_state_offset = to_tensor(_state_offset).flatten()
-        current_p_state_offset = to_tensor(_p_state_offset).flatten()
-        #print(current_p_state_offset)
-        out = self.decide(current_p_state_offset)
-        return out
-
-    def decide(self, current_state_offset):
-        self.lqr_status = current_state_offset @ self.P_LQR @ current_state_offset.t() 
-        self.move_status = current_state_offset @ self.P_MOVE @ current_state_offset.t() 
-        if abs(self.lqr_status) <= 1:
-            output = self.u_eq + torch.matmul(self.K_LQR, -current_state_offset)
-        elif abs(self.move_status) <= 1:
-            output = self.u_eq + torch.matmul(self.K_MOVE, -current_state_offset)
-        else:
-            output = self.u_eq + torch.matmul(self.K, -current_state_offset)
-
-        return output
+        self.ve_moment[:, 0, 2] *= -1.0
+        self.ve_moment[:, 2, 2] *= -1.0

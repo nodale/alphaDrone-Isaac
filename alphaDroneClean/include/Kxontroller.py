@@ -48,10 +48,10 @@ class Kxontroller:
         self.ve_thrust = torch.zeros([num_envs, 4, 3], dtype=torch.float32, device=device)
         self.ve_moment = torch.zeros([num_envs, 4, 3], dtype=torch.float32, device=device)
 
-        self.K = torch.tensor(_controller_params['K_LQR'], dtype=torch.float32, device=device)
+        self.K = torch.tensor(_controller_params['K_MOVE'], dtype=torch.float32, device=device)
         self.P = torch.tensor(_controller_params['P_LQR'], dtype=torch.float32, device=device)
 
-        self.K_LQR = torch.tensor(_controller_params['K_LQR'], dtype=torch.float32, device=device)
+        self.K_LQR = torch.tensor(_controller_params['K_MOVE'], dtype=torch.float32, device=device)
         self.P_LQR = torch.tensor(_controller_params['P_LQR'], dtype=torch.float32, device=device)
 
 

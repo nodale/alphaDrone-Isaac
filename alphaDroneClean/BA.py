@@ -38,7 +38,7 @@ class Drone():
     imu_cfg = ImuCfg(
             prim_path="{ENV_REGEX_NS}/drone/base_link",
             update_period=1.0/800.0,
-            history_length=10,
+            history_length=2,
             debug_vis=False
             )
 
@@ -52,7 +52,7 @@ class Drone():
         self.setpoint = torch.zeros(num_envs, 3, device=device)
 
 class DataWriter():
-    def __init__(self, path="dataset/patient_one_data.zarr/", num_batch=10, seq_len=10, n_dim=25):
+    def __init__(self, path="/home/joey/Thesis/data/patient_one_data.zarr/", num_batch=10, seq_len=10, n_dim=25):
         self.path = path
         self.num_batch = int(num_batch)
         self.seq_len = int(seq_len)
@@ -98,7 +98,7 @@ class DroneSceneCfg(InteractiveSceneCfg):
 
 @configclass
 class DroneEnvCfg(DirectRLEnvCfg):
-    episode_length_s = 8.0
+    episode_length_s = 4.0
     decimation = 1
     action_space = 4
     observation_space = 6
@@ -136,7 +136,7 @@ class DroneEnvCfg(DirectRLEnvCfg):
 
     scene: InteractiveSceneCfg = DroneSceneCfg(
         num_envs=2, 
-        env_spacing=4.0, 
+        env_spacing=1e-3, 
         replicate_physics=True,
     )
 
@@ -150,7 +150,7 @@ class DroneEnv(DirectRLEnv):
 
         #data writer
         self.n_dim = 27
-        self.max_iter = 50
+        self.max_iter = 500
         self.seq_len = int(self.cfg.episode_length_s / self.cfg.sim.dt)
         self.writer = DataWriter(num_batch=self.max_iter, seq_len=self.seq_len, n_dim=self.n_dim)
         self.t1 = 1.0
@@ -166,9 +166,6 @@ class DroneEnv(DirectRLEnv):
         #mission planner
         self.bezier = Planner.random(
                 M=self.scene.num_envs, 
-                N=3, 
-                low=-3.0, 
-                high=3.0,
                 seed=0,
                 offset=self.scene.articulations["drone"].data.root_com_pos_w,
                 device="cuda")
@@ -215,10 +212,10 @@ class DroneEnv(DirectRLEnv):
             drone_data = self.scene.articulations["drone"].data
             imu_data = self.scene.sensors["imu"].data
 
-            pos = drone_data.root_com_pos_w                      # (N, 3)
-            quat = drone_data.root_com_quat_w                    # (N, 4) [w, x, y, z]
-            lin_vel = drone_data.root_com_lin_vel_b              # (N, 3)
-            ang_vel = drone_data.root_com_ang_vel_b              # (N, 3)
+            pos = drone_data.root_com_pos_w.detach().clone()                      # (N, 3)
+            quat = drone_data.root_com_quat_w.detach().clone()                    # (N, 4) [w, x, y, z]
+            lin_vel = drone_data.root_com_lin_vel_b.detach().clone()              # (N, 3)
+            ang_vel = drone_data.root_com_ang_vel_b.detach().clone()              # (N, 3)
 
             w, x, y, z = quat.unbind(dim=1)
 
@@ -231,15 +228,12 @@ class DroneEnv(DirectRLEnv):
 
             R_T = R.transpose(1, 2)
 
-            local_lin_vel = torch.bmm(R_T, lin_vel.unsqueeze(-1)).squeeze(-1)
-            local_ang_vel = torch.bmm(R_T, ang_vel.unsqueeze(-1)).squeeze(-1)
-
             #transforming the data to PX4 orientation
             pos[:, 1:] = pos[:, 1:] * -1.0
             quat[:, 2:] = quat[:, 2:] * -1.0
-            local_lin_vel[:, 1:] = local_lin_vel[:, 1:] * -1.0
-            local_ang_vel[:, 1:] = local_ang_vel[:, 1:] * -1.0
-            setpoint = self.drone.setpoint
+            lin_vel[:, 1:] = lin_vel[:, 1:] * -1.0
+            ang_vel[:, 1:] = ang_vel[:, 1:] * -1.0
+            setpoint = self.drone.setpoint.detach().clone()
             setpoint[:, 1:] = setpoint[:, 1:] * -1.0
             acc =  imu_data.lin_acc_b.detach().clone()
             acc[:, 1:] = acc[:, 1:] * -1.0
@@ -248,9 +242,9 @@ class DroneEnv(DirectRLEnv):
             
             obs = torch.cat([
                 pos,
-                local_lin_vel,
+                lin_vel,
                 quat,
-                local_ang_vel,
+                ang_vel,
                 imu_data.lin_acc_b,
                 imu_data.ang_vel_b,
                 self.drone.controller.thrust,
@@ -296,13 +290,13 @@ class DroneEnv(DirectRLEnv):
         root_state[:, :3] += pos_noise
 
         # keep above ground
-        root_state[:, 2] = torch.clamp(root_state[:, 2], min=0.2)
+        root_state[:, 2] = torch.clamp(root_state[:, 2], min=0.1)
 
         # add env origins
         root_state[:, :3] += self._terrain.env_origins[env_ids]
 
         # --- ORIENTATION RANDOMIZATION (yaw only for stability) ---
-        yaw = torch.empty(len(env_ids), device=self.device).uniform_(-torch.pi/20.0, torch.pi/20.0)
+        yaw = torch.empty(len(env_ids), device=self.device).uniform_(-torch.pi/80.0, torch.pi/80.0)
 
         cy = torch.cos(yaw * 0.5)
         sy = torch.sin(yaw * 0.5)
@@ -316,11 +310,11 @@ class DroneEnv(DirectRLEnv):
         ], dim=1)
 
         # --- LINEAR VELOCITY RANDOMIZATION ---
-        lin_vel_noise = torch.empty((len(env_ids), 3), device=self.device).uniform_(-0.1, 0.1)
+        lin_vel_noise = torch.empty((len(env_ids), 3), device=self.device).uniform_(-0.01, 0.01)
         root_state[:, 7:10] = lin_vel_noise
 
         # --- ANGULAR VELOCITY RANDOMIZATION ---
-        ang_vel_noise = torch.empty((len(env_ids), 3), device=self.device).uniform_(-0.01, 0.01)
+        ang_vel_noise = torch.empty((len(env_ids), 3), device=self.device).uniform_(-0.001, 0.001)
         root_state[:, 10:13] = ang_vel_noise
 
         # --- JOINT RANDOMIZATION (rotors) ---
@@ -351,9 +345,6 @@ class DroneEnv(DirectRLEnv):
         # final setpoint = relative to spawn
         self.bezier = Planner.random(
                 M=self.scene.num_envs, 
-                N=5, 
-                low=-3.0, 
-                high=3.0,
                 seed=0,
                 offset=self.scene.articulations["drone"].data.root_com_pos_w,
                 device="cuda")

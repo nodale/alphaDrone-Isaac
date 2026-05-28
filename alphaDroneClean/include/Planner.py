@@ -23,25 +23,31 @@ class Planner:
         )
 
     @staticmethod
-    def random(M, N, offset, low=0.0, high=1.0, device=None, dtype=torch.float32, seed=0):
-        generator = torch.Generator(device="cuda")
+    def random(M=1, N=3, offset=None, low=-3.0, high=3.0, device=None, dtype=torch.float32, seed=0):
+        generator = torch.Generator(device=device if device is not None else "cpu")
         generator.manual_seed(seed)
 
-        low = torch.tensor([0.0, low, 0.5], device=device, dtype=dtype)
-        high = torch.tensor([high, high, 1.5], device=device, dtype=dtype)
+        low_t = torch.tensor([0.0, low, 0.3], device=device, dtype=dtype)
+        high_t = torch.tensor([high, high, 2.0], device=device, dtype=dtype)
 
-        ctrl = (high - low) * torch.rand((M, N, 3), generator=generator, device=device, dtype=dtype) + low
+        ctrl = (high_t - low_t) * torch.rand((M, N, 3), generator=generator, device=device, dtype=dtype) + low_t
 
         idx = torch.argsort(ctrl[:, :, 0], dim=1)
         ctrl = torch.gather(ctrl, 1, idx.unsqueeze(-1).expand(-1, -1, 3))
 
-        ctrl[:, 0, :2] = torch.tensor(
-                [0.0, 0.0],
-                device=device,
-                dtype=dtype,
-            )
+        ctrl[:, 0, :2] = torch.tensor([0.0, 0.0], device=device, dtype=dtype)
 
-        if offset != None:
+        angle = 2 * torch.pi * torch.rand((M,), generator=generator, device=device, dtype=dtype)
+        c = torch.cos(angle)
+        s = torch.sin(angle)
+
+        x = ctrl[:, :, 0].clone()
+        y = ctrl[:, :, 1].clone()
+
+        ctrl[:, :, 0] = c[:, None] * x - s[:, None] * y
+        ctrl[:, :, 1] = s[:, None] * x + c[:, None] * y
+
+        if offset is not None:
             ctrl = ctrl + offset.unsqueeze(1)
 
         return Planner(ctrl, device=device, dtype=dtype)
@@ -87,7 +93,7 @@ class Planner:
 
         return self.t
 
-    def step(self, pos, mode="pos_vel", dt=0.02, lookahead=0.05):
+    def step(self, pos, mode="pos_vel", dt=0.02, lookahead=0.08):
         pos = torch.as_tensor(pos, dtype=self.ctrl.dtype, device=self.device)
 
         self.update_t(pos, dt)

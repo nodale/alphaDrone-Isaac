@@ -118,7 +118,8 @@ class Kxontroller:
         self,
         num_envs,
         device="cuda",
-        freq=200
+        freq=200,
+        esc_delay=1.0/400.0,
     ):
 
         with open("include/controller.yaml", "r") as f:
@@ -128,7 +129,7 @@ class Kxontroller:
         self.num_envs = num_envs
 
         self.control_dt = 1.0 / freq
-        self.time_summer = 0.0
+        self.esc_delay=esc_delay
 
         self.K = torch.tensor(
             params["K_LQR"],
@@ -177,13 +178,7 @@ class Kxontroller:
         )
 
     @torch.no_grad()
-    def step(self, desired_pos, states, dt):
-        self.time_summer += dt
-
-        if self.time_summer < self.control_dt:
-            return
-
-        self.time_summer = 0.0
+    def step(self, desired_pos, states, dt, physics_dt=1.0/800.0):
 
         pos = states[:, 0:3]
         vel = states[:, 3:6]
@@ -222,17 +217,21 @@ class Kxontroller:
             - torch.matmul(state_offset, self.K.T)
         )
 
-        self.thrust.copy_(control)
+        #self.thrust.copy_(control)
+        _alpha = physics_dt / self.esc_delay
+        self.thrust += _alpha * (control - self.thrust.detach().clone())
 
         self.thrust.clamp_(
             min=0.0,
             max=13.25
         )
+        
+
         self.ve_thrust.zero_()
-        self.ve_thrust[:, :, 2] = self.thrust
+        self.ve_thrust[:, :, 2] = self.thrust.detach().clone()
 
         self.ve_moment.zero_()
-        self.ve_moment[:, :, 2] = self.thrust * 0.09
+        self.ve_moment[:, :, 2] = self.thrust.detach().clone() * 0.09
 
         self.ve_moment[:, 0, 2] *= -1.0
         self.ve_moment[:, 2, 2] *= -1.0

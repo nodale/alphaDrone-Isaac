@@ -8,7 +8,7 @@
             }
             dictionary Perspective = {
                 double3 position = (-0.4792194041478371, -0.33045905819029453, 0.19126600201191096)
-                double3 target = (0.6670697115305093, 0.643691874089715, -0.3402057976266531)
+                double3 target = (0.6670697115305093, 0.6436918740897148, -0.3402057976266531)
             }
             dictionary Right = {
                 double3 position = (0, -5, 0)
@@ -104,22 +104,11 @@ def PhysicsScene "physicsScene" (
 }
 
 over "quadrotor" (
-    active = true
     prepend references = @./fly_boy/fly_boy.usd@
 )
 {
-    string isaac:namespace (
-        displayName = "Namespace"
-        doc = "Namespace of the prim in Isaac Sim"
-    )
-
     over "base_link"
     {
-        string isaac:nameOverride (
-            displayName = "Name Override"
-            doc = "Name override for prim lookup in base name search"
-        )
-
         def IsaacImuSensor "IMU"
         {
             int angularVelocityFilterWidth = 1

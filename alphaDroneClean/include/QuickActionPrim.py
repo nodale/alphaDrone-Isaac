@@ -1,119 +1,313 @@
-# TBD
-
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
 import torch
 
-class ActionPrim:
-    def __init__(self, ctrl, device=None, dtype=torch.float32):
-        """
-        ctrl: (M, N, 3) control points per environment
-        """
-        self.device = device or torch.device("cpu")
+#base action class
+class Action(ABC):
 
-        self.ctrl = torch.as_tensor(ctrl, dtype=dtype, device=self.device)
-        self.M, self.N, _ = self.ctrl.shape
+    def __init__(self, num_envs, dim, device):
+        self.num_envs = num_envs
+        self.dim = dim
+        self.device = device
 
-        self.t = torch.zeros(self.M, dtype=dtype, device=self.device)
+    @abstractmethod
+    def reset(self, ids, start_pos, generator):
+        pass
 
-        # binomial coefficients for Bernstein basis
-        n = self.N - 1
-        i = torch.arange(self.N, device=self.device, dtype=dtype)
+    @abstractmethod
+    def step(self, ids, tau, out):
+        pass
 
-        self.C = torch.exp(
-            torch.lgamma(torch.tensor(n + 1.0, device=self.device, dtype=dtype))
-            - torch.lgamma(i + 1)
-            - torch.lgamma(torch.tensor(n, device=self.device, dtype=dtype) - i + 1)
+class HoldPosition(Action):
+
+    def __init__(self, num_envs, dim, device):
+        super().__init__(num_envs, dim, device)
+        self.target = torch.zeros(num_envs, dim, device=device)
+
+    def reset(self, ids, start_pos, generator):
+        self.target[ids] = start_pos
+
+    def step(self, ids, tau, out):
+        out[ids] = self.target[ids]
+
+class RandomWalk(Action):
+
+    def __init__(self, num_envs, dim, device, vel_scale=0.5):
+        super().__init__(num_envs, dim, device)
+
+        self.vel_scale = vel_scale
+
+        self.p0 = torch.zeros(num_envs, dim, device=device)
+        self.vel = torch.zeros(num_envs, dim, device=device)
+
+    def reset(self, ids, start_pos, generator):
+
+        n = ids.numel()
+
+        self.p0[ids] = start_pos
+
+        self.vel[ids] = (
+            torch.randn(
+                n,
+                self.dim,
+                generator=generator,
+                device=self.device,
+            )
+            * self.vel_scale
         )
 
-    @staticmethod
-    def random(M, N, offset, low=0.0, high=1.0, device=None, dtype=torch.float32, seed=0):
-        generator = torch.Generator(device="cuda")
-        generator.manual_seed(seed)
+    def step(self, ids, tau, out):
 
-        low = torch.tensor([low, low, 0.5], device=device, dtype=dtype)
-        high = torch.tensor([high, high, 1.5], device=device, dtype=dtype)
+        t = tau[ids].unsqueeze(-1)
 
-        ctrl = (high - low) * torch.rand((M, N, 3), generator=generator, device=device, dtype=dtype) + low
+        out[ids] = (
+            self.p0[ids]
+            + self.vel[ids] * t
+        )
 
-        ctrl[:, 0, :2] = torch.tensor(
-                [0.0, 0.0],
-                device=device,
-                dtype=dtype,
+class CubicSpline(Action):
+
+    def __init__(self, num_envs, dim, device, scale=0.5):
+        super().__init__(num_envs, dim, device)
+
+        self.scale = scale
+
+        self.p0 = torch.zeros(num_envs, dim, device=device)
+        self.p1 = torch.zeros(num_envs, dim, device=device)
+        self.p2 = torch.zeros(num_envs, dim, device=device)
+        self.p3 = torch.zeros(num_envs, dim, device=device)
+
+    def _noise(self, n, generator):
+
+        return (
+            torch.randn(
+                n,
+                self.dim,
+                generator=generator,
+                device=self.device,
             )
+            * self.scale
+        )
 
-        if offset != None:
-            ctrl = ctrl + offset.unsqueeze(1)
+    def reset(self, ids, start_pos, generator):
 
-        return Planner(ctrl, device=device, dtype=dtype)
+        n = ids.numel()
 
-    def _basis(self, t):
-        # t: (M,)
-        t = t[:, None]                      # (M,1)
-        i = torch.arange(self.N, device=self.device)[None, :]  # (1,N)
+        n1 = self._noise(n, generator)
+        n2 = self._noise(n, generator)
+        n3 = self._noise(n, generator)
 
-        return self.C * (t ** i) * ((1 - t) ** (self.N - 1 - i))
+        self.p0[ids] = start_pos
+        self.p1[ids] = start_pos + n1
+        self.p2[ids] = start_pos + n1 + n2
+        self.p3[ids] = start_pos + n1 + n2 + n3
 
-    def _dbasis(self, t):
-        B = self._basis(t)  # (M,N)
-        dB = torch.zeros_like(B)
+    def step(self, ids, tau, out):
 
-        for i in range(self.N - 1):
-            dB[:, i] += (self.N - 1) * (B[:, i + 1] - B[:, i])
+        t = tau[ids].unsqueeze(-1)
+        omt = 1.0 - t
 
-        dB[:, -1] = -(self.N - 1) * B[:, -1]
-        return dB
+        omt2 = omt * omt
+        omt3 = omt2 * omt
 
-    def point(self, t):
-        B = self._basis(t)  # (M,N)
-        return torch.einsum('mnk,mn->mk', self.ctrl, B)
+        t2 = t * t
+        t3 = t2 * t
 
-    def vel(self, t):
-        dB = self._dbasis(t)
-        return torch.einsum('mnk,mn->mk', self.ctrl, dB)
+        out[ids] = (
+            omt3 * self.p0[ids]
+            + 3.0 * omt2 * t * self.p1[ids]
+            + 3.0 * omt * t2 * self.p2[ids]
+            + t3 * self.p3[ids]
+        )
 
-    def update_t(self, pos, dt=0.02):
-        pos = torch.as_tensor(pos, dtype=self.ctrl.dtype, device=self.device)
+class RandomSphereOffset(Action):
 
-        p = self.point(self.t)
-        v = self.vel(self.t)
+    def __init__(
+        self,
+        num_envs,
+        dim,
+        device,
+        min_radius=0.1,
+        max_radius=1.0,
+    ):
+        super().__init__(num_envs, dim, device)
 
-        err = pos - p  # (M,3)
+        self.min_radius = min_radius
+        self.max_radius = max_radius
 
-        vt = torch.sum(err * v, dim=1)
-        denom = torch.sum(v * v, dim=1) + 1e-8
+        self.target = torch.zeros(num_envs, dim, device=device)
 
-        self.t = self.t + dt * (vt / denom)
-        self.t = torch.clamp(self.t, 0.0, 1.0)
+    def reset(self, ids, start_pos, generator):
+        n = len(ids)
 
-        return self.t
+        direction = torch.randn(
+            (n, self.dim),
+            generator=generator,
+            device=self.device,
+        )
 
-    def step(self, pos, mode="pos_vel", dt=0.02, lookahead=0.05):
-        pos = torch.as_tensor(pos, dtype=self.ctrl.dtype, device=self.device)
+        direction = direction / torch.norm(
+            direction,
+            dim=-1,
+            keepdim=True,
+        )
 
-        self.update_t(pos, dt)
+        radius = torch.rand(
+            (n, 1),
+            generator=generator,
+            device=self.device,
+        )
 
-        t = torch.clamp(self.t + lookahead, 0.0, 1.0)
+        radius = (
+            self.min_radius
+            + (self.max_radius - self.min_radius) * radius
+        )
 
-        #out = {}
+        # Offset
+        offset = direction * radius
 
-        #if mode in ("pos", "pos_vel"):
-        #    out["pos"] = self.point(t)
+        # Final target
+        self.target[ids] = start_pos + offset
 
-        #if mode in ("vel", "pos_vel"):
-        #    v = self.vel(t)
-        #    out["vel"] = v / (torch.norm(v, dim=1, keepdim=True) + 1e-8)
+    def step(self, ids, tau, out):
+        out[ids] = self.target[ids]
 
-        #return out
-        return self.point(t)
+#action manager
+@dataclass
+class ActionPrimitive:
+    actions: list[type[Action]]
+    generator: torch.Generator
+    dim: int
+    num_envs: int
+    device: str = "cuda"
+    min_duration: int = 50
+    max_duration: int = 200
+    min_z: float = 0.6
 
-def main():
-    bz = Planner.random(M=8, N=5, low=-5, high=5, seed=0, device="cuda")
-    #out = bz.step(current_pos, mode="pos_vel")
-    #pos_setpoints = out.get("pos")
-    #vel_setpoints = out.get("vel")
 
+    def __post_init__(self):
+        self.bank = [a(dim=self.dim, device=self.device, num_envs=self.num_envs) for a in self.actions]
 
+        self.current = torch.zeros(
+            self.num_envs,
+            dtype=torch.long,
+            device=self.device,
+        )
+
+        self.t = torch.zeros(self.num_envs, device=self.device)
+        self.duration = self._sample_duration()
+
+        all_envs = torch.arange(
+            self.num_envs,
+            device=self.device,
+        )
+
+        self._switch(
+            all_envs,
+            current_pos=torch.zeros(
+                self.num_envs,
+                self.dim,
+                device=self.device,
+            ),
+        )
+
+    def _sample_duration(self):
+        return torch.randint(
+            self.min_duration,
+            self.max_duration,
+            (self.num_envs,),
+            generator=self.generator,
+            device=self.device,
+        )
+
+    def _switch(self, env_ids, current_pos):
+        if len(env_ids) == 0:
+            return
+
+        next_actions = torch.randint(
+            0,
+            len(self.bank),
+            (len(env_ids),),
+            generator=self.generator,
+            device=self.device,
+        )
+
+        self.current[env_ids] = next_actions
+        self.t[env_ids] = 0.0
+        self.duration[env_ids] = torch.randint(
+            self.min_duration,
+            self.max_duration,
+            (env_ids.numel(),),
+            generator=self.generator,
+            device=self.device,
+        )
+
+        for idx, action in enumerate(self.bank):
+            mask = next_actions == idx
+
+            if mask.any():
+                ids = env_ids[mask]
+
+                action.reset(
+                    ids=ids,
+                    start_pos=current_pos[ids],
+                    generator=self.generator,
+                )
+
+    @torch.no_grad()
+    def step(self, current_pos):
+
+        expired = torch.where(self.t >= self.duration)[0]
+        self._switch(expired, current_pos)
+
+        tau = self.t / self.duration.clamp_min(1)
+
+        out = torch.empty_like(current_pos)
+
+        for idx, action in enumerate(self.bank):
+
+            ids = torch.nonzero(
+                self.current == idx,
+                as_tuple=False,
+            ).squeeze(-1)
+
+            if ids.numel() > 0:
+                action.step(ids, tau, out)
+
+        self.t += 1
+
+        z = out[:, 2]
+        below = z < self.min_z
+        z[below] = self.min_z + (self.min_z - z[below])
+
+        return out
+
+#only for testing
 if __name__ == "__main__":
-    main()
 
-#prompt:
-#can you generate a python class to generate bezier curves based on N control points using a function, not pre-generated? we also want it to be vectorised for the size of M. We want to use it for navigation setpoints, Using the current positions size (M, 3) of M environments, analyse te current state in the bezier curve and return the setpoints to be followed based on the environments' bezier curves. each M has to have different 3D bezier curve. We also want the options for the setpoints to be positions only, velocities only, or position_velocity. This will be repeated at each loop, using the current state, to get a setpoint to following the bezier curve. we also want to be able to genereate new bezier curves using random number generator. make the code as short and simple as possible.
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    primitive = ActionPrimitive(
+        actions=[
+            HoldPosition,
+            RandomWalk,
+            CubicSpline,
+        ],
+        dim=3,
+        num_envs=4096,
+        device=device,
+        seed=42,
+        min_duration=20,
+        max_duration=100,
+    )
+
+    # external simulator state
+    pos = torch.zeros(4096, 3, device=device)
+
+    for _ in range(1000):
+
+        # target setpoints
+        target = primitive.step(pos)
+
+        # fake dynamics
+        pos += 0.02 * (target - pos)

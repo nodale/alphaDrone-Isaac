@@ -22,6 +22,12 @@ from isaaclab.utils import configclass
 from isaaclab.utils.math import subtract_frame_transforms
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.sensors import ImuCfg, Imu
+from isaaclab.managers import EventManager
+from isaaclab.managers import EventTermCfg
+
+from isaaclab.managers import SceneEntityCfg
+import isaaclab.envs.mdp as mdp
+from isaaclab.envs import DirectRLEnvCfg
 
 from pxr import Gf
 from include.Kxontroller import Kxontroller
@@ -69,6 +75,41 @@ class DroneEnvWindow(BaseEnvWindow):
                     self._create_debug_vis_ui_element("targets", self.env)
 
 
+
+@configclass
+class MassRandomisationCfg:
+    randomize_mass = EventTermCfg(
+        func=mdp.randomize_rigid_body_mass,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg(
+                "drone",
+                body_names="base_link",
+            ),
+            "mass_distribution_params": (0.98, 1.02),
+            "operation": "scale",
+            "distribution": "uniform",
+            "recompute_inertia": True,
+        },
+    )
+
+    randomize_com = EventTermCfg(
+        func=mdp.randomize_rigid_body_com,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg(
+                "drone",
+                body_names="base_link",
+            ),
+            "com_range": {
+                "x": (-0.001, 0.001),
+                "y": (-0.001, 0.001),
+                "z": (-0.01, 0.01),
+            },
+        },
+    )
+
+
 @configclass
 class DroneSceneCfg(InteractiveSceneCfg):
     imu = Drone.imu_cfg
@@ -114,9 +155,11 @@ class DroneEnvCfg(DirectRLEnvCfg):
 
     scene: InteractiveSceneCfg = DroneSceneCfg(
         num_envs=2, 
-        env_spacing=1e-3, 
+        env_spacing=1e-5, 
         replicate_physics=True,
     )
+
+    events = MassRandomisationCfg()
 
 
 class DroneEnv(DirectRLEnv):
@@ -127,8 +170,8 @@ class DroneEnv(DirectRLEnv):
         super().__init__(cfg, render_mode, **kwargs)
 
         #data writer
-        self.n_dim = 27
-        self.max_iter = 15000
+        self.n_dim = 26
+        self.max_iter = 10000
         self.seq_len = int(self.cfg.episode_length_s / self.cfg.sim.dt)
         self.writer = DataWriter(num_batch=self.max_iter, seq_len=self.seq_len, n_dim=self.n_dim)
         self.t1 = 1.0
@@ -152,12 +195,13 @@ class DroneEnv(DirectRLEnv):
             actions=[
                 RandomWalk,
                 RandomSphereOffset,
+                HoldPosition,
             ],
             dim=3,
             num_envs=self.scene.num_envs,
             device="cuda",
             min_duration=200,
-            max_duration=1200,
+            max_duration=2000,
             generator=self.rngen
         )
 
@@ -169,6 +213,7 @@ class DroneEnv(DirectRLEnv):
         self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
 
         self.scene.clone_environments(copy_from_source=True)
+        self.event_manager = EventManager(self.cfg.events, self)
 
         if self.device == "cpu":
             self.scene.filter_collisions(global_prim_paths=[self.cfg.terrain.prim_path])
@@ -215,29 +260,41 @@ class DroneEnv(DirectRLEnv):
             setpoint[:, 1:] *= -1.0            
 
             obs = torch.cat([
-                pos,
+                pos, #more testing for independent pos/ remove it from training input
                 lin_vel,
                 quat_frd,
                 ang_vel,
                 acc,
                 gyro,
-                self.drone.controller.thrust,
+                self.drone.controller.thrust, #TODO : test with normalised thrust
                 setpoint,
-                env_timestamp*0.0,
             ], dim=1)  # (N, dim)
+
+            self.drone.controller.step(desired_pos=setpoint, states=obs[:, :13], dt=1.0/self.sampling_freq, physics_dt=self.cfg.sim.dt)
 
             valid = self.step_idx < self.seq_len  # (N,)
             idx = self.step_idx[valid]
+            
+            #obs = torch.cat([
+            #    pos/3.0,
+            #    lin_vel/0.8,
+            #    quat_frd,
+            #    ang_vel/0.5,
+            #    acc/25.0,
+            #    gyro/0.5,
+            #    self.drone.controller.thrust/9.81, #TODO : test with normalised thrust
+            #    setpoint/3.0,
+            #], dim=1)  # (N, dim)
 
             self.data[valid, idx] = obs[valid]
             self.step_idx[valid] += 1
 
-            self.drone.controller.step(desired_pos=setpoint, states=obs[:, :13], dt=1.0/self.sampling_freq, physics_dt=self.cfg.sim.dt)
+
 
     def _apply_action(self):
         #noise/disturbance, uses a scaler here
-        self.drone.thrust_noise = 1e-1 * (torch.randn_like(self.drone.controller.ve_thrust, generator=self.rngen) + self.drone.controller.ve_thrust.detach().clone())
-        self.drone.moment_noise = 1e-2 * (torch.randn_like(self.drone.controller.ve_moment, generator=self.rngen) * 0.09 + self.drone.controller.ve_moment.detach().clone())
+        self.drone.thrust_noise = 2e-5 * (torch.randn_like(self.drone.controller.ve_thrust, generator=self.rngen) + self.drone.controller.ve_thrust.detach().clone())
+        self.drone.moment_noise = 2e-5 * (torch.randn_like(self.drone.controller.ve_moment, generator=self.rngen) * 0.09 + self.drone.controller.ve_moment.detach().clone())
 
         self.scene.articulations["drone"].set_external_force_and_torque(
                 self.drone.controller.ve_thrust + self.drone.thrust_noise, 
@@ -272,37 +329,21 @@ class DroneEnv(DirectRLEnv):
         if env_ids is None or len(env_ids) == self.num_envs:
             env_ids = self.scene.articulations["drone"]._ALL_INDICES
 
-        # clone defaults so we don’t overwrite internal buffers
+        self.event_manager.apply(mode="reset", env_ids=env_ids, global_env_step_count=self.common_step_counter)
+
         joint_pos = self.scene.articulations["drone"].data.default_joint_pos[env_ids].clone()
         joint_vel = self.scene.articulations["drone"].data.default_joint_vel[env_ids].clone()
         root_state = self.scene.articulations["drone"].data.default_root_state[env_ids].clone()
 
-        # --- POSITION RANDOMIZATION ---
         root_state[:, 2] = torch.clamp(root_state[:, 2], min=0.0)
 
-        # --- WRITE TO SIM ---
         self.scene.articulations["drone"].write_root_pose_to_sim(root_state[:, :7], env_ids)
         self.scene.articulations["drone"].write_root_velocity_to_sim(root_state[:, 7:], env_ids)
         self.scene.articulations["drone"].write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
 
         self.episode_length_buf[env_ids] = 0
 
-        # random offset (relative target)
-        low = torch.tensor([-1.0, -1.0, 0.5], device=self.device)
-        high = torch.tensor([1.0, 1.0, 3.0], device=self.device)
-
-        rand = torch.rand((len(env_ids), 3), device=self.device)
-        offset = low + (high - low) * rand
-
-        # base position = environment origin (spawn reference)
         base_pos = self._terrain.env_origins[env_ids]
-
-        # final setpoint = relative to spawn
-        #self.bezier = Planner.random(
-        #        M=self.scene.num_envs, 
-        #        seed=self.seed,
-        #        offset=self.scene.articulations["drone"].data.root_com_pos_w,
-        #        device="cuda")
 
         for i in env_ids:
             if self.step_idx[i] < self.seq_len:

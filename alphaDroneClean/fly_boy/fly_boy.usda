@@ -107,8 +107,19 @@ over "quadrotor" (
     prepend references = @./fly_boy/fly_boy.usd@
 )
 {
+    string isaac:namespace (
+        displayName = "Namespace"
+        doc = "Namespace of the prim in Isaac Sim"
+    )
+
     over "base_link"
     {
+        string isaac:nameOverride (
+            displayName = "Name Override"
+            doc = "Name override for prim lookup in base name search"
+        )
+        float physics:mass = 3.6000001
+
         def IsaacImuSensor "IMU"
         {
             int angularVelocityFilterWidth = 1

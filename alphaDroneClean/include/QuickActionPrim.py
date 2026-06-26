@@ -127,8 +127,8 @@ class RandomSphereOffset(Action):
         num_envs,
         dim,
         device,
-        min_radius=0.1,
-        max_radius=1.5,
+        min_radius=0.05,
+        max_radius=1.0,
     ):
         super().__init__(num_envs, dim, device)
 
@@ -182,8 +182,9 @@ class ActionPrimitive:
     device: str = "cuda"
     min_duration: int = 50
     max_duration: int = 200
-    min_z: float = 0.6
 
+    min_xyz: tuple = (-2.5, -2.5, 0.6)
+    max_xyz: tuple = (2.5, 2.5, 2.5)
 
     def __post_init__(self):
         self.bank = [a(dim=self.dim, device=self.device, num_envs=self.num_envs) for a in self.actions]
@@ -209,6 +210,17 @@ class ActionPrimitive:
                 self.dim,
                 device=self.device,
             ),
+        )
+
+        self.min_xyz = torch.tensor(
+            self.min_xyz,
+            device=self.device,
+            dtype=torch.float32,
+        )
+        self.max_xyz = torch.tensor(
+            self.max_xyz,
+            device=self.device,
+            dtype=torch.float32,
         )
 
     def _sample_duration(self):
@@ -276,9 +288,11 @@ class ActionPrimitive:
 
         self.t += 1
 
-        z = out[:, 2]
-        below = z < self.min_z
-        z[below] = self.min_z + (self.min_z - z[below])
+        below = out < self.min_xyz
+        above = out > self.max_xyz
+
+        out[below] = 2 * self.min_xyz.expand_as(out)[below] - out[below]
+        out[above] = 2 * self.max_xyz.expand_as(out)[above] - out[above]
 
         return out
 

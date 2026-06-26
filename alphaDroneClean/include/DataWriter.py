@@ -1,7 +1,7 @@
 import zarr
 
 class DataWriter():
-    def __init__(self, path="/home/joey/Thesis/data/patient_one_data.zarr/", num_batch=10, seq_len=10, n_dim=25):
+    def __init__(self, path="/media/egghead/Scratch/joey/simulation_data/patient_two_data.zarr/", num_batch=10, seq_len=10, n_dim=25):
         self.path = path
         self.num_batch = int(num_batch)
         self.seq_len = int(seq_len)

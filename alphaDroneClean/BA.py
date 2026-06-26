@@ -117,7 +117,7 @@ class DroneSceneCfg(InteractiveSceneCfg):
 
 @configclass
 class DroneEnvCfg(DirectRLEnvCfg):
-    episode_length_s = 8.0
+    episode_length_s = 20.0
     decimation = 1
     action_space = 4
     observation_space = 6
@@ -170,8 +170,8 @@ class DroneEnv(DirectRLEnv):
         super().__init__(cfg, render_mode, **kwargs)
 
         #data writer
-        self.n_dim = 26
-        self.max_iter = 10000
+        self.n_dim = 23
+        self.max_iter = 1000
         self.seq_len = int(self.cfg.episode_length_s / self.cfg.sim.dt)
         self.writer = DataWriter(num_batch=self.max_iter, seq_len=self.seq_len, n_dim=self.n_dim)
         self.t1 = 1.0
@@ -185,7 +185,7 @@ class DroneEnv(DirectRLEnv):
         self.sampling_freq = 200.0
 
         #mission planner
-        self.rngen = torch.Generator(device="cuda").manual_seed(0)
+        self.rngen = torch.Generator(device="cuda").manual_seed(1)
         #self.bezier = Planner.random(
         #        M=self.scene.num_envs, 
         #        seed=self.seed,
@@ -200,7 +200,7 @@ class DroneEnv(DirectRLEnv):
             dim=3,
             num_envs=self.scene.num_envs,
             device="cuda",
-            min_duration=200,
+            min_duration=800,
             max_duration=2000,
             generator=self.rngen
         )
@@ -218,8 +218,8 @@ class DroneEnv(DirectRLEnv):
         if self.device == "cpu":
             self.scene.filter_collisions(global_prim_paths=[self.cfg.terrain.prim_path])
 
-        light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
-        light_cfg.func("/World/Light", light_cfg)
+        #light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
+        #light_cfg.func("/World/Light", light_cfg)
 
 
     def _pre_physics_step(self, actions: torch.Tensor):
@@ -275,16 +275,15 @@ class DroneEnv(DirectRLEnv):
             valid = self.step_idx < self.seq_len  # (N,)
             idx = self.step_idx[valid]
             
-            #obs = torch.cat([
-            #    pos/3.0,
-            #    lin_vel/0.8,
-            #    quat_frd,
-            #    ang_vel/0.5,
-            #    acc/25.0,
-            #    gyro/0.5,
-            #    self.drone.controller.thrust/9.81, #TODO : test with normalised thrust
-            #    setpoint/3.0,
-            #], dim=1)  # (N, dim)
+            obs = torch.cat([
+                pos/3.0,
+                lin_vel/0.8,
+                quat_frd,
+                ang_vel/0.5,
+                acc/25.0,
+                self.drone.controller.thrust/9.81, #TODO : test with normalised thrust
+                setpoint/3.0,
+            ], dim=1)  # (N, dim)
 
             self.data[valid, idx] = obs[valid]
             self.step_idx[valid] += 1
@@ -293,8 +292,8 @@ class DroneEnv(DirectRLEnv):
 
     def _apply_action(self):
         #noise/disturbance, uses a scaler here
-        self.drone.thrust_noise = 2e-5 * (torch.randn_like(self.drone.controller.ve_thrust, generator=self.rngen) + self.drone.controller.ve_thrust.detach().clone())
-        self.drone.moment_noise = 2e-5 * (torch.randn_like(self.drone.controller.ve_moment, generator=self.rngen) * 0.09 + self.drone.controller.ve_moment.detach().clone())
+        self.drone.thrust_noise = 2e-8 * (torch.randn_like(self.drone.controller.ve_thrust, generator=self.rngen) + self.drone.controller.ve_thrust.detach().clone())
+        self.drone.moment_noise = 2e-8 * (torch.randn_like(self.drone.controller.ve_moment, generator=self.rngen) * 0.09 + self.drone.controller.ve_moment.detach().clone())
 
         self.scene.articulations["drone"].set_external_force_and_torque(
                 self.drone.controller.ve_thrust + self.drone.thrust_noise, 

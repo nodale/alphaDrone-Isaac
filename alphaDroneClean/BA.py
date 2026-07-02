@@ -200,8 +200,8 @@ class DroneEnv(DirectRLEnv):
             dim=3,
             num_envs=self.scene.num_envs,
             device="cuda",
-            min_duration=800,
-            max_duration=2000,
+            min_duration=3200,
+            max_duration=6400,
             generator=self.rngen
         )
 
@@ -343,6 +343,7 @@ class DroneEnv(DirectRLEnv):
         self.episode_length_buf[env_ids] = 0
 
         base_pos = self._terrain.env_origins[env_ids]
+        self.primitive.reset(env_ids, self.scene.articulations["drone"].data.root_com_pos_w,)
 
         for i in env_ids:
             if self.step_idx[i] < self.seq_len:

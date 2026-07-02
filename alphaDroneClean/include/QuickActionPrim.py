@@ -296,6 +296,10 @@ class ActionPrimitive:
 
         return out
 
+    @torch.no_grad()
+    def reset(self, env_ids, current_pos):
+        self._switch(env_ids, current_pos)
+
 #only for testing
 if __name__ == "__main__":
 

@@ -183,14 +183,10 @@ class DroneEnv(DirectRLEnv):
         self.drone.rotor_ids = self.scene.articulations["drone"].find_bodies("rotor_[1-4]")
         self.loop_counter = 1
         self.sampling_freq = 200.0
+        self.steps_per_sample = int(round(1.0 / (self.cfg.sim.dt * self.sampling_freq)))
 
         #mission planner
         self.rngen = torch.Generator(device="cuda").manual_seed(1)
-        #self.bezier = Planner.random(
-        #        M=self.scene.num_envs, 
-        #        seed=self.seed,
-        #        offset=self.scene.articulations["drone"].data.root_com_pos_w,
-        #        device="cuda")
         self.primitive = ActionPrimitive(
             actions=[
                 RandomWalk,
@@ -223,13 +219,10 @@ class DroneEnv(DirectRLEnv):
 
 
     def _pre_physics_step(self, actions: torch.Tensor):
-        self._actions = actions.clone()
+        #self._actions = actions.clone()
         self.loop_counter += 1
-        env_timestamp = self.episode_length_buf.reshape(self.episode_length_buf.shape[0], 1) * self.cfg.sim.dt
-
-        if self.loop_counter % (self.cfg.sim.dt * self.sampling_freq) == 0:
-            #_sp = self.bezier.step(self.scene.articulations["drone"].data.root_com_pos_w, dt=self.cfg.sim.dt ,mode="pos")
-            #self.drone.setpoint = _sp
+        #env_timestamp = self.episode_length_buf.reshape(self.episode_length_buf.shape[0], 1) * self.cfg.sim.dt
+        if self.loop_counter % self.steps_per_sample == 0:
             self.drone.setpoint = self.primitive.step(self.scene.articulations["drone"].data.root_com_pos_w)
 
             drone_data = self.scene.articulations["drone"].data
@@ -363,7 +356,6 @@ class DroneEnv(DirectRLEnv):
         print("progress : ", self.writer.batch_idx, " out of ", self.writer.num_batch)
         if self.writer.batch_idx >= self.writer.num_batch:
             print("Dataset complete. Stopping simulation...")
-
 
             self.writer.store.close()
             raise SystemExit

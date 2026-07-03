@@ -34,6 +34,7 @@ from include.Kxontroller import Kxontroller
 from include.Planner import Planner
 from include.QuickActionPrim import ActionPrimitive, HoldPosition, RandomWalk, CubicSpline, RandomSphereOffset
 from include.DataWriter import DataWriter
+from include.QuickMavMulti import QuickMavMulti
 
 class Drone():
     drone_cfg = ArticulationCfg(
@@ -185,6 +186,14 @@ class DroneEnv(DirectRLEnv):
         self.sampling_freq = 200.0
         self.steps_per_sample = int(round(1.0 / (self.cfg.sim.dt * self.sampling_freq)))
 
+        #for SITL mavlink com
+        self.mav = QuickMavMulti(
+                num_envs=self.scene.num_envs,
+                tcp_base=4560,
+                udp_base=14580)
+        self.mav.sendHeartbeats(udp=False)
+        self.mav.arm()
+
         #mission planner
         self.rngen = torch.Generator(device="cuda").manual_seed(1)
         self.primitive = ActionPrimitive(
@@ -265,6 +274,27 @@ class DroneEnv(DirectRLEnv):
 
             self.drone.controller.step(desired_pos=setpoint, states=obs[:, :13], dt=1.0/self.sampling_freq, physics_dt=self.cfg.sim.dt)
 
+            #sending mavlink stuffs
+            timestamp = int(self.sim.current_time * 1e6) & 0xFFFFFFFF
+            self.mav.sendImu(
+                timestamp,
+                acc,
+                gyro,
+            )
+            self.mav.sendFakeGPS(
+                timestamp,
+                pos,
+                )
+            self.mav.sendOdometry(
+                timestamp,
+                pos,
+                quat_frd,
+                lin_vel,
+                ang_vel,
+            )
+            self.mav.sendHeartbeats(udp=True)
+            self.mav.printEstimatorStatus(udp=True)
+
             valid = self.step_idx < self.seq_len  # (N,)
             idx = self.step_idx[valid]
             
@@ -288,6 +318,16 @@ class DroneEnv(DirectRLEnv):
         self.drone.thrust_noise = 2e-8 * (torch.randn_like(self.drone.controller.ve_thrust, generator=self.rngen) + self.drone.controller.ve_thrust.detach().clone())
         self.drone.moment_noise = 2e-8 * (torch.randn_like(self.drone.controller.ve_moment, generator=self.rngen) * 0.09 + self.drone.controller.ve_moment.detach().clone())
 
+        actuation = self.mav.recvActuation()
+        actuation_t = torch.tensor(actuation, device="cuda")
+        print(actuation_t)
+
+        #self.scene.articulations["drone"].set_external_force_and_torque(
+        #        actuation_t,
+        #        actuation_t * 0.09,
+        #        body_ids=self.drone.rotor_ids[0], 
+        #        is_global=False
+        #        )
         self.scene.articulations["drone"].set_external_force_and_torque(
                 self.drone.controller.ve_thrust + self.drone.thrust_noise, 
                 self.drone.controller.ve_moment + self.drone.moment_noise,
@@ -337,6 +377,13 @@ class DroneEnv(DirectRLEnv):
 
         base_pos = self._terrain.env_origins[env_ids]
         self.primitive.reset(env_ids, self.scene.articulations["drone"].data.root_com_pos_w,)
+
+        #reset px4 instances
+        env_list = env_ids.cpu().tolist()
+        self.mav.resetVehicle(
+            env_ids=env_list,
+            reboot=True,
+        )
 
         for i in env_ids:
             if self.step_idx[i] < self.seq_len:

@@ -11,7 +11,7 @@ from pymavlink.dialects.v20 import common as mavlink2
 class QuickMavMulti:
     num_envs: int
     tcp_base: int = 4560
-    udp_base: int = 14580
+    udp_base: int = 13030
     baudrate: int = 57600
 
     def __post_init__(self):
@@ -22,9 +22,12 @@ class QuickMavMulti:
         ]
 
         self.udp_masters = [
-            mavutil.mavlink_connection(f"udpout:localhost:{self.udp_base+i}", self.baudrate)
+            mavutil.mavlink_connection(f"udpout:localhost:{self.udp_base+i}", self.baudrate, autoreconnect=True)
             for i in range(self.num_envs)
         ]
+
+        self.last_actuation = np.zeros((self.num_envs, 16), dtype=np.float32)
+        self._actuation_initialized = np.zeros(self.num_envs, dtype=bool)
 
     def _master(self, idx, udp=False):
         return self.udp_masters[idx] if udp else self.tcp_masters[idx]
@@ -65,7 +68,7 @@ class QuickMavMulti:
             )
 
     def sendHeartbeats(self, udp=False):
-        for master in self.tcp_masters:
+        for master in (self.udp_masters if udp else self.tcp_masters):
             try:
                 master.mav.heartbeat_send(
                     mavutil.mavlink.MAV_TYPE_ONBOARD_CONTROLLER,
@@ -74,7 +77,7 @@ class QuickMavMulti:
                     0,
                     mavutil.mavlink.MAV_STATE_ACTIVE,
                 )
-                master.wait_heartbeat(timeout=5)
+                master.wait_heartbeat(timeout=1)
 
                 print(master.target_system)
                 print(master.target_component)
@@ -82,42 +85,14 @@ class QuickMavMulti:
                 master.mav.command_long_send(
                     master.target_system,
                     master.target_component,
-                    mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,  
-                    0,                                             
-                    0,                             
-                    10000,                                   
-                    0, 0, 0, 0, 0                                  
-                    )
-
-            except:
-                print("tcp connection failed")
-
-        for master in self.udp_masters:
-            try:
-                master.mav.heartbeat_send(
-                    mavutil.mavlink.MAV_TYPE_ONBOARD_CONTROLLER,
-                    mavutil.mavlink.MAV_AUTOPILOT_INVALID,
+                    mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
                     0,
-                    0,
-                    mavutil.mavlink.MAV_STATE_ACTIVE,
+                    mavutil.mavlink.MAVLINK_MSG_ID_ESTIMATOR_STATUS, 
+                    100000,                                         
+                    0, 0, 0, 0, 0,
                 )
-                master.wait_heartbeat(timeout=5)
-
-                print(master.target_system)
-                print(master.target_component)
-
-                master.mav.command_long_send(
-                    master.target_system,
-                    master.target_component,
-                    mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,  
-                    0,                                             
-                    0,                             
-                    10000,                                   
-                    0, 0, 0, 0, 0                                  
-                    )
-
             except:
-                print("udp connection failed")
+                print("connection failed")
 
     def arm(self, env_ids=None, force=False, udp=False):
         self._sendCommandLong(
@@ -209,6 +184,48 @@ class QuickMavMulti:
                 0b0000000111111,
             )
 
+    def sendFakeGPS(self, time_usec, pos, udp=False):
+        masters = self.udp_masters if udp else self.tcp_masters
+        lat0 = 71.0 * 1e7  
+        lon0 = -40.0 * 1e7
+        alt0 = 500.0 * 1e3
+
+        R = 6378137.0 
+
+        for i, master in enumerate(masters):
+            x = float(pos[i, 0])
+            y = float(pos[i, 1])
+            z = float(pos[i, 2])
+
+            dlat = y / R
+            dlon = x / (R * math.cos(math.radians(lat0 / 1e7)))
+
+            lat = lat0 + math.degrees(dlat) * 1e7
+            lon = lon0 + math.degrees(dlon) * 1e7
+
+            alt = alt0 + z * 1000.0  # meters → mm
+
+            master.mav.hil_gps_send(
+                int(time_usec),
+
+                3,          # fix type (3D fix)
+                int(lat),
+                int(lon),
+                int(alt),
+
+                0,          # eph
+                0,          # epv
+                0,          # vel
+                0,          # vn
+                0,          # ve
+                0,          # vd
+
+                65535,      # cog
+                255,        # satellites
+                0,          # yaw
+                36000       # hdop
+            )
+
     def sendPositionTargets(
         self,
         time_usec,
@@ -276,6 +293,24 @@ class QuickMavMulti:
                 0,
                 0,
             )
+
+    def recvActuation(self, udp=False):
+        masters = self.udp_masters if udp else self.tcp_masters
+        for i, master in enumerate(masters):
+            msg = master.recv_match(
+                type="HIL_ACTUATOR_CONTROLS",
+                blocking=False,
+            )
+            if msg is not None:
+                controls = np.array(msg.controls, dtype=np.float32)
+                self.last_actuation[i] = controls
+                self._actuation_initialized[i] = True
+
+            else:
+                if not self._actuation_initialized[i]:
+                    self.last_actuation[i] = np.zeros(16, dtype=np.float32)
+
+        return self.last_actuation[..., :4].copy()
 
     def printEstimatorStatus(self, udp=False):
         masters = self.udp_masters if udp else self.tcp_masters
@@ -345,59 +380,3 @@ class QuickMavMulti:
             force=force,
             udp=udp,
         )
-
-
-import time
-import torch
-
-def main():
-    num_envs = 5
-
-    mav = QuickMavMulti(
-        num_envs=num_envs,
-        tcp_base=4560,
-        udp_base=14580,
-    )
-    time.sleep(1.0)
-
-    print("\n[TEST] Sending heartbeats...")
-    mav.sendHeartbeats()
-
-    time.sleep(0.5)
-
-    pos = torch.zeros(num_envs, 3)
-    pos[:, 0] = torch.arange(num_envs) * 0.5
-
-    quat = torch.zeros(num_envs, 4)
-    quat[:, 0] = 1.0  # w=1 identity quaternion
-
-    vel = torch.zeros(num_envs, 3)
-    ang_vel = torch.zeros(num_envs, 3)
-
-    print("[TEST] Sending odometry batch...")
-    mav.sendOdometry(
-        time_usec=int(time.time() * 1e6) & 0xFFFFFFFF,
-        pos=pos,
-        quat=quat,
-        vel=vel,
-        ang_vel=ang_vel,
-    )
-    time.sleep(0.5)
-
-    print("[TEST] Sending velocity targets...")
-    vel_cmd = torch.zeros(num_envs, 3)
-    vel_cmd[:, 0] = 1.0
-    mav.sendVelocityTargets(
-        time_usec=int(time.time() * 1e6) & 0xFFFFFFFF,
-        vel=vel_cmd,
-    )
-    time.sleep(0.5)
-
-    print("[TEST] Receiving messages...")
-    for i in range(num_envs):
-        msg = mav._master(i).recv_match(type="HEARTBEAT", blocking=False)
-        print(f"[{i}] MSG:", msg)
-    print("\n[TEST COMPLETE]")
-
-if __name__ == "__main__":
-    main()

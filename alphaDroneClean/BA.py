@@ -118,7 +118,7 @@ class DroneSceneCfg(InteractiveSceneCfg):
 
 @configclass
 class DroneEnvCfg(DirectRLEnvCfg):
-    episode_length_s = 20.0
+    episode_length_s = 4.0
     decimation = 1
     action_space = 4
     observation_space = 6
@@ -188,6 +188,7 @@ class DroneEnv(DirectRLEnv):
         self.steps_per_sample = int(round(1.0 / (self.cfg.sim.dt * self.sampling_freq)))
 
         #for SITL mavlink com
+        self.sitl = True
         self.mav = QuickMavMulti(
                 num_envs=self.scene.num_envs,
                 tcp_base=4560,
@@ -207,7 +208,7 @@ class DroneEnv(DirectRLEnv):
             dim=3,
             num_envs=self.scene.num_envs,
             device="cuda",
-            min_duration=3200,
+            min_duration=400,
             max_duration=6400,
             generator=self.actgen
         )
@@ -234,7 +235,12 @@ class DroneEnv(DirectRLEnv):
         self.loop_counter += 1
         #env_timestamp = self.episode_length_buf.reshape(self.episode_length_buf.shape[0], 1) * self.cfg.sim.dt
         if self.loop_counter % self.steps_per_sample == 0:
-            self.drone.setpoint = self.primitive.step(self.scene.articulations["drone"].data.root_com_pos_w)
+            if self.sitl:
+                armed_mask = self.mav.recvArmStatus(udp=True).to(self.device)
+                print(armed_mask)
+                self.drone.setpoint = self.primitive.step(self.scene.articulations["drone"].data.root_com_pos_w, armed_mask)
+            else:
+                self.drone.setpoint = self.primitive.step(self.scene.articulations["drone"].data.root_com_pos_w, armed_mask)
 
             drone_data = self.scene.articulations["drone"].data
             imu_data = self.scene.sensors["imu"].data
@@ -277,26 +283,33 @@ class DroneEnv(DirectRLEnv):
             self.drone.controller.step(desired_pos=setpoint, states=obs[:, :13], dt=1.0/self.sampling_freq, physics_dt=self.cfg.sim.dt)
 
             #sending mavlink stuffs
-            timestamp = int(self.sim.current_time * 1e6) & 0xFFFFFFFF
-            self.mav.sendImu(
-                timestamp,
-                acc,
-                gyro,
-            )
-            self.mav.sendFakeGPS(
-                timestamp,
-                pos,
-                )
-            self.mav.sendOdometry(
-                timestamp,
-                pos,
-                quat_frd,
-                lin_vel,
-                ang_vel,
-            )
-            self.mav.sendHeartbeats(udp=True)
-            self.mav.arm(force=True, udp=True)
-            #self.mav.printEstimatorStatus(udp=True)
+            if self.sitl:
+                timestamp = int(self.sim.current_time * 1e6) & 0xFFFFFFFF
+                self.mav.sendImu(
+                        timestamp,
+                        acc,
+                        gyro,
+                        )
+                self.mav.sendFakeGPS(
+                        timestamp,
+                        pos,
+                        )
+                self.mav.sendOdometry(
+                        timestamp,
+                        pos,
+                        quat_frd,
+                        lin_vel,
+                        ang_vel,
+                        )
+                if armed_mask.any():
+                    self.mav.sendPositionTargets(
+                            timestamp,
+                            setpoint, 
+                            udp=True
+                            )
+                #self.mav.sendHeartbeats(udp=True)
+                self.mav.arm(force=True, udp=True)
+                #self.mav.printEstimatorStatus(udp=True)
 
             valid = self.step_idx < self.seq_len  # (N,)
             idx = self.step_idx[valid]
@@ -321,17 +334,22 @@ class DroneEnv(DirectRLEnv):
         self.drone.thrust_noise = 2e-8 * (torch.randn_like(self.drone.controller.ve_thrust, generator=self.rngen) + self.drone.controller.ve_thrust.detach().clone())
         self.drone.moment_noise = 2e-8 * (torch.randn_like(self.drone.controller.ve_moment, generator=self.rngen) * 0.09 + self.drone.controller.ve_moment.detach().clone())
 
-        actuation = self.mav.recvActuation()
-        actuation_t = torch.tensor(actuation, device="cuda")
-        print(actuation_t)
-
-        #self.scene.articulations["drone"].set_external_force_and_torque(
-        #        actuation_t,
-        #        actuation_t * 0.09,
-        #        body_ids=self.drone.rotor_ids[0], 
-        #        is_global=False
-        #        )
-        self.scene.articulations["drone"].set_external_force_and_torque(
+        if self.sitl:
+            actuation = self.mav.recvActuation()
+            actuation_t = torch.tensor(actuation, device="cuda")
+            #print(actuation_t)
+            forces = torch.zeros(self.scene.num_envs,4, 3, device="cuda",)
+            forces[..., 2] = actuation_t * 13.5
+            moments = torch.zeros_like(forces)
+            moments[..., 2] = actuation_t * 0.09 * 13.5 
+            self.scene.articulations["drone"].set_external_force_and_torque(
+                forces,
+                moments,
+                body_ids=self.drone.rotor_ids[0],
+                is_global=False,
+            )
+        else:
+            self.scene.articulations["drone"].set_external_force_and_torque(
                 self.drone.controller.ve_thrust + self.drone.thrust_noise, 
                 self.drone.controller.ve_moment + self.drone.moment_noise,
                 body_ids=self.drone.rotor_ids[0], 
@@ -340,9 +358,7 @@ class DroneEnv(DirectRLEnv):
 
     def _get_observations(self) -> dict:
         observations = {}
-
         return observations
-
 
     def _get_rewards(self) -> torch.Tensor:
         distance_to_goal = torch.linalg.norm(self.scene.articulations["drone"].data.root_pos_w, dim=1)
@@ -356,7 +372,7 @@ class DroneEnv(DirectRLEnv):
     def _get_dones(self):
         drone = self.scene.articulations["drone"]
         angle = torch.acos((-drone.data.projected_gravity_b[:, 2]).clamp(-1.0, 1.0))
-        died = angle > torch.deg2rad(torch.tensor(120.0, device=angle.device))
+        died = angle > torch.deg2rad(torch.tensor(80.0, device=angle.device))
         time_out = self.episode_length_buf >= self.max_episode_length
         return died, time_out
 

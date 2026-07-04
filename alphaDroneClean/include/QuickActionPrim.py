@@ -267,33 +267,32 @@ class ActionPrimitive:
                 )
 
     @torch.no_grad()
-    def step(self, current_pos):
-
-        expired = torch.where(self.t >= self.duration)[0]
+    def step(self, current_pos, active_mask=None):
+        if active_mask is None:
+            active_mask = torch.ones(
+                self.num_envs,
+                dtype=torch.bool,
+                device=self.device,
+            )
+        self.t[active_mask] += 1
+        expired = torch.where((self.t >= self.duration) & active_mask)[0]
         self._switch(expired, current_pos)
-
         tau = self.t / self.duration.clamp_min(1)
-
         out = torch.empty_like(current_pos)
-
         for idx, action in enumerate(self.bank):
-
-            ids = torch.nonzero(
-                self.current == idx,
-                as_tuple=False,
-            ).squeeze(-1)
-
+            ids = torch.nonzero((self.current == idx) & active_mask,as_tuple=False,).squeeze(-1)
             if ids.numel() > 0:
                 action.step(ids, tau, out)
 
-        self.t += 1
-
+        # IMPORTANT: inactive envs hold position (no NaNs)
+        inactive = ~active_mask
+        out[inactive] = current_pos[inactive]
+        # bounds
         below = out < self.min_xyz
         above = out > self.max_xyz
 
         out[below] = 2 * self.min_xyz.expand_as(out)[below] - out[below]
         out[above] = 2 * self.max_xyz.expand_as(out)[above] - out[above]
-
         return out
 
     @torch.no_grad()

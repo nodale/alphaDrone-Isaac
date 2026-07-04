@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import math
 import time
+import torch
 import numpy as np
 
 from pymavlink import mavutil
@@ -78,22 +79,13 @@ class QuickMavMulti:
                     mavutil.mavlink.MAV_STATE_ACTIVE,
                 )
                 
-                master.wait_heartbeat(timeout=0.1)
+                master.wait_heartbeat(timeout=1e-5)
+                #print(master.target_system)
+                #print(master.target_component)
 
-                print(master.target_system)
-                print(master.target_component)
-
-                #master.mav.command_long_send(
-                #    master.target_system,
-                #    master.target_component,
-                #    mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
-                #    0,
-                #    mavutil.mavlink.MAVLINK_MSG_ID_ESTIMATOR_STATUS, 
-                #    100000,                                         
-                #    0, 0, 0, 0, 0,
-                #)
             except:
                 print("connection failed")
+                
 
     def arm(self, env_ids=None, force=False, udp=False):
         self._sendCommandLong(
@@ -237,14 +229,10 @@ class QuickMavMulti:
         for i, master in enumerate(masters):
             master.mav.set_position_target_local_ned_send(
                 int(time_usec),
-
                 master.target_system,
                 master.target_component,
-
                 mavutil.mavlink.MAV_FRAME_LOCAL_NED,
-
                 0b0000111111111000,
-
                 float(pos[i,0]),
                 float(pos[i,1]),
                 float(pos[i,2]),
@@ -313,6 +301,24 @@ class QuickMavMulti:
 
         return self.last_actuation[..., :4].copy()
 
+    def recvArmStatus(self, udp=False):
+        masters = self.udp_masters if udp else self.tcp_masters
+        armed = torch.zeros(self.num_envs, dtype=torch.bool)
+        for i, master in enumerate(masters):
+            master.mav.heartbeat_send(
+                mavutil.mavlink.MAV_TYPE_ONBOARD_CONTROLLER,
+                mavutil.mavlink.MAV_AUTOPILOT_INVALID,
+                0, 0,
+                mavutil.mavlink.MAV_STATE_ACTIVE,)
+            master.wait_heartbeat(timeout=1e-4)
+            b = master.target_system
+            if b == 0:
+                continue
+            else :
+                armed[i] = True
+
+        return armed
+
     def printEstimatorStatus(self, udp=False):
         masters = self.udp_masters if udp else self.tcp_masters
         for i, master in enumerate(masters):
@@ -353,8 +359,8 @@ class QuickMavMulti:
         self,
         env_ids=None,
         reboot=True,
-        force=False,
-        udp=False,
+        force=True,
+        udp=True,
     ):
         self.disarm(
             env_ids=env_ids,
@@ -374,10 +380,10 @@ class QuickMavMulti:
             #
             masters = self.udp_masters if udp else self.tcp_masters
             for idx in self._get_indices(env_ids):
-                masters[idx].wait_heartbeat(timeout=5)
+                masters[idx].wait_heartbeat(timeout=1e-4)
         time.sleep(0.5)
-        self.arm(
-            env_ids=env_ids,
-            force=force,
-            udp=udp,
-        )
+        #self.arm(
+        #    env_ids=env_ids,
+        #    force=force,
+        #    udp=udp,
+        #)

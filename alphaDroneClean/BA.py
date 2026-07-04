@@ -125,6 +125,7 @@ class DroneEnvCfg(DirectRLEnvCfg):
     state_space = 0
     debug_vis = False
     dt = 1.0/800.0
+    seed = 100
     
     ui_window_class_type = DroneEnvWindow
 
@@ -192,10 +193,11 @@ class DroneEnv(DirectRLEnv):
                 tcp_base=4560,
                 udp_base=14580)
         self.mav.sendHeartbeats(udp=False)
-        self.mav.arm()
+        self.mav.sendHeartbeats(udp=True)
 
         #mission planner
         self.rngen = torch.Generator(device="cuda").manual_seed(1)
+        self.actgen = torch.Generator(device="cuda").manual_seed(10)
         self.primitive = ActionPrimitive(
             actions=[
                 RandomWalk,
@@ -207,7 +209,7 @@ class DroneEnv(DirectRLEnv):
             device="cuda",
             min_duration=3200,
             max_duration=6400,
-            generator=self.rngen
+            generator=self.actgen
         )
 
     def _setup_scene(self):
@@ -293,7 +295,8 @@ class DroneEnv(DirectRLEnv):
                 ang_vel,
             )
             self.mav.sendHeartbeats(udp=True)
-            self.mav.printEstimatorStatus(udp=True)
+            self.mav.arm(force=True, udp=True)
+            #self.mav.printEstimatorStatus(udp=True)
 
             valid = self.step_idx < self.seq_len  # (N,)
             idx = self.step_idx[valid]

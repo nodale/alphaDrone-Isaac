@@ -11,7 +11,7 @@ from pymavlink.dialects.v20 import common as mavlink2
 class QuickMavMulti:
     num_envs: int
     tcp_base: int = 4560
-    udp_base: int = 13030
+    udp_base: int = 14580
     baudrate: int = 57600
 
     def __post_init__(self):
@@ -22,7 +22,7 @@ class QuickMavMulti:
         ]
 
         self.udp_masters = [
-            mavutil.mavlink_connection(f"udpout:localhost:{self.udp_base+i}", self.baudrate, autoreconnect=True)
+            mavutil.mavlink_connection(f"udpout:localhost:{self.udp_base+i}", self.baudrate)
             for i in range(self.num_envs)
         ]
 
@@ -77,20 +77,21 @@ class QuickMavMulti:
                     0,
                     mavutil.mavlink.MAV_STATE_ACTIVE,
                 )
-                master.wait_heartbeat(timeout=1)
+                
+                master.wait_heartbeat(timeout=0.1)
 
                 print(master.target_system)
                 print(master.target_component)
 
-                master.mav.command_long_send(
-                    master.target_system,
-                    master.target_component,
-                    mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
-                    0,
-                    mavutil.mavlink.MAVLINK_MSG_ID_ESTIMATOR_STATUS, 
-                    100000,                                         
-                    0, 0, 0, 0, 0,
-                )
+                #master.mav.command_long_send(
+                #    master.target_system,
+                #    master.target_component,
+                #    mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
+                #    0,
+                #    mavutil.mavlink.MAVLINK_MSG_ID_ESTIMATOR_STATUS, 
+                #    100000,                                         
+                #    0, 0, 0, 0, 0,
+                #)
             except:
                 print("connection failed")
 

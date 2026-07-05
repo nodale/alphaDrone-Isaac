@@ -30,6 +30,11 @@ class QuickMavMulti:
         self.last_actuation = np.zeros((self.num_envs, 16), dtype=np.float32)
         self._actuation_initialized = np.zeros(self.num_envs, dtype=bool)
 
+        self.last_odometry = np.zeros((self.num_envs, 13), dtype=np.float32)
+        self._odometry_initialized = np.zeros(self.num_envs, dtype=bool)
+
+        self.armed = torch.zeros(self.num_envs, dtype=torch.bool)
+
     def _master(self, idx, udp=False):
         return self.udp_masters[idx] if udp else self.tcp_masters[idx]
 
@@ -119,7 +124,7 @@ class QuickMavMulti:
             msg = mavlink2.MAVLink_odometry_message(
                 int(time_usec),
                 mavutil.mavlink.MAV_FRAME_LOCAL_NED,
-                mavutil.mavlink.MAV_FRAME_LOCAL_NED,
+                mavutil.mavlink.MAV_FRAME_BODY_FRD,
 
                 float(pos[i,0]),
                 float(pos[i,1]),
@@ -295,29 +300,52 @@ class QuickMavMulti:
                 self.last_actuation[i] = controls
                 self._actuation_initialized[i] = True
 
+                self.armed[i] = bool(int(msg.mode) & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
             else:
                 if not self._actuation_initialized[i]:
                     self.last_actuation[i] = np.zeros(16, dtype=np.float32)
 
         return self.last_actuation[..., :4].copy()
 
-    def recvArmStatus(self, udp=False):
-        masters = self.udp_masters if udp else self.tcp_masters
-        armed = torch.zeros(self.num_envs, dtype=torch.bool)
-        for i, master in enumerate(masters):
-            master.mav.heartbeat_send(
-                mavutil.mavlink.MAV_TYPE_ONBOARD_CONTROLLER,
-                mavutil.mavlink.MAV_AUTOPILOT_INVALID,
-                0, 0,
-                mavutil.mavlink.MAV_STATE_ACTIVE,)
-            master.wait_heartbeat(timeout=1e-4)
-            b = master.target_system
-            if b == 0:
-                continue
-            else :
-                armed[i] = True
+    #def recvArmStatus(self, udp=False):
+    #    masters = self.udp_masters if udp else self.tcp_masters
+    #    armed = torch.zeros(self.num_envs, dtype=torch.bool)
+    #    for i, master in enumerate(masters):
+    #        msg = master.recv_match(
+    #            type="HIL_ACTUATOR_CONTROLS",
+    #            blocking=False,
+    #        )
+    #        if msg is not None:
+    #            print(msg.mode)
+    #            #if b == 1:
+    #            #    armed[i] = True
+    #            #else:
+    #            #    armed[i] = False
 
-        return armed
+    #    return armed
+
+    def recvOdometry(self, udp=False):
+        masters = self.udp_masters if udp else self.tcp_masters
+        for i, master in enumerate(masters):
+            msg = master.recv_match(type="ODOMETRY",blocking=False,)
+            if msg is not None:
+                odom = np.array([
+                    msg.x,
+                    msg.y,
+                    msg.z,
+                    *msg.q,           # [w, x, y, z]
+                    msg.vx,
+                    msg.vy,
+                    msg.vz,
+                    msg.rollspeed,
+                    msg.pitchspeed,
+                    msg.yawspeed,
+                ], dtype=np.float32)
+                self.last_odometry[i] = odom
+                self._odometry_initialized[i] = True
+            elif not self._odometry_initialized[i]:
+                self.last_odometry[i].fill(0.0)
+        return self.last_odometry.copy()
 
     def printEstimatorStatus(self, udp=False):
         masters = self.udp_masters if udp else self.tcp_masters
@@ -346,7 +374,7 @@ class QuickMavMulti:
                     f"status={msg.system_status}"
                 )
 
-    def rebootAutopilot(self, env_ids=None, force=False, udp=False):
+    def rebootAutopilot(self, env_ids=None, force=True, udp=False):
         self._sendCommandLong(
             mavutil.mavlink.MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN,
             env_ids=env_ids,
@@ -362,6 +390,7 @@ class QuickMavMulti:
         force=True,
         udp=True,
     ):
+        self.armed[env_ids] = False
         self.disarm(
             env_ids=env_ids,
             force=force,

@@ -32,7 +32,7 @@ class HoldPosition(Action):
 
 class RandomWalk(Action):
 
-    def __init__(self, num_envs, dim, device, vel_scale=0.75):
+    def __init__(self, num_envs, dim, device, vel_scale=1.0):
         super().__init__(num_envs, dim, device)
 
         self.vel_scale = vel_scale
@@ -128,7 +128,7 @@ class RandomSphereOffset(Action):
         dim,
         device,
         min_radius=0.05,
-        max_radius=1.0,
+        max_radius=0.5,
     ):
         super().__init__(num_envs, dim, device)
 
@@ -183,7 +183,7 @@ class ActionPrimitive:
     min_duration: int = 50
     max_duration: int = 200
 
-    min_xyz: tuple = (-2.5, -2.5, 0.6)
+    min_xyz: tuple = (-2.5, -2.5, 0.8)
     max_xyz: tuple = (2.5, 2.5, 2.5)
 
     def __post_init__(self):

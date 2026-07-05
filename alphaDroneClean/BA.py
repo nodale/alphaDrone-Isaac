@@ -118,7 +118,7 @@ class DroneSceneCfg(InteractiveSceneCfg):
 
 @configclass
 class DroneEnvCfg(DirectRLEnvCfg):
-    episode_length_s = 4.0
+    episode_length_s = 5.0
     decimation = 1
     action_space = 4
     observation_space = 6
@@ -189,12 +189,20 @@ class DroneEnv(DirectRLEnv):
 
         #for SITL mavlink com
         self.sitl = True
-        self.mav = QuickMavMulti(
-                num_envs=self.scene.num_envs,
-                tcp_base=4560,
-                udp_base=14580)
-        self.mav.sendHeartbeats(udp=False)
-        self.mav.sendHeartbeats(udp=True)
+        if self.sitl:
+            self.mav = QuickMavMulti(
+                    num_envs=self.scene.num_envs,
+                    tcp_base=4560,
+                    udp_base=14580)
+            self.mav.sendHeartbeats(udp=False)
+            self.mav.sendHeartbeats(udp=True)
+            self.sitl_actuation = torch.zeros(self.scene.num_envs,4, 3, device="cuda",)
+            self.sitl_moment = torch.zeros(self.scene.num_envs,4, 3, device="cuda",)
+
+            self.grace_period = torch.zeros(self.scene.num_envs, dtype=torch.bool)
+            self.grace_counter = torch.zeros(self.scene.num_envs, dtype=torch.int32)
+            self.grace_steps = int((2.0/4.0) / self.cfg.sim.dt)
+            self.grace_armed_mask = torch.zeros(self.scene.num_envs, dtype=torch.bool)
 
         #mission planner
         self.rngen = torch.Generator(device="cuda").manual_seed(1)
@@ -208,8 +216,8 @@ class DroneEnv(DirectRLEnv):
             dim=3,
             num_envs=self.scene.num_envs,
             device="cuda",
-            min_duration=400,
-            max_duration=6400,
+            min_duration=100,
+            max_duration=800,
             generator=self.actgen
         )
 
@@ -236,11 +244,32 @@ class DroneEnv(DirectRLEnv):
         #env_timestamp = self.episode_length_buf.reshape(self.episode_length_buf.shape[0], 1) * self.cfg.sim.dt
         if self.loop_counter % self.steps_per_sample == 0:
             if self.sitl:
-                armed_mask = self.mav.recvArmStatus(udp=True).to(self.device)
-                print(armed_mask)
-                self.drone.setpoint = self.primitive.step(self.scene.articulations["drone"].data.root_com_pos_w, armed_mask)
+                self.grace_counter[self.grace_period] += 1
+                done = self.grace_counter >= self.grace_steps
+                self.grace_period[done] = False
+
+                actuation = self.mav.recvActuation()
+                actuation_t = torch.tensor(actuation, device=self.device)
+
+                self.sitl_actuation[..., 2] = actuation_t * 13.5
+                self.sitl_moment[..., 2] = self.sitl_actuation[..., 2] * 0.09
+                self.sitl_moment[..., 0] *= -1.0
+                self.sitl_moment[..., 2] *= -1.0
+
+                #self.grace_armed_mask = self.mav.armed & ~self.grace_period
+                #grace_armed_mask signals the script when the arming command is allowed to
+                #be sent
+                self.grace_armed_mask = self.grace_period
+
+                if self.loop_counter % 4 == 0:
+                    print("arm ", self.mav.armed, 
+                          " grace_armed  ", self.grace_armed_mask,
+                          " grace_counter    ", self.grace_counter,
+                          " grace_steps    ", self.grace_steps
+                          )
+                self.drone.setpoint = self.primitive.step(self.scene.articulations["drone"].data.root_com_pos_w, active_mask=self.grace_armed_mask.to(self.device))
             else:
-                self.drone.setpoint = self.primitive.step(self.scene.articulations["drone"].data.root_com_pos_w, armed_mask)
+                self.drone.setpoint = self.primitive.step(self.scene.articulations["drone"].data.root_com_pos_w)
 
             drone_data = self.scene.articulations["drone"].data
             imu_data = self.scene.sensors["imu"].data
@@ -269,19 +298,6 @@ class DroneEnv(DirectRLEnv):
             gyro[:, 1:] *= -1.0
             setpoint[:, 1:] *= -1.0            
 
-            obs = torch.cat([
-                pos, #more testing for independent pos/ remove it from training input
-                lin_vel,
-                quat_frd,
-                ang_vel,
-                acc,
-                gyro,
-                self.drone.controller.thrust, #TODO : test with normalised thrust
-                setpoint,
-            ], dim=1)  # (N, dim)
-
-            self.drone.controller.step(desired_pos=setpoint, states=obs[:, :13], dt=1.0/self.sampling_freq, physics_dt=self.cfg.sim.dt)
-
             #sending mavlink stuffs
             if self.sitl:
                 timestamp = int(self.sim.current_time * 1e6) & 0xFFFFFFFF
@@ -290,10 +306,6 @@ class DroneEnv(DirectRLEnv):
                         acc,
                         gyro,
                         )
-                self.mav.sendFakeGPS(
-                        timestamp,
-                        pos,
-                        )
                 self.mav.sendOdometry(
                         timestamp,
                         pos,
@@ -301,32 +313,60 @@ class DroneEnv(DirectRLEnv):
                         lin_vel,
                         ang_vel,
                         )
-                if armed_mask.any():
-                    self.mav.sendPositionTargets(
-                            timestamp,
-                            setpoint, 
-                            udp=True
-                            )
-                #self.mav.sendHeartbeats(udp=True)
-                self.mav.arm(force=True, udp=True)
-                #self.mav.printEstimatorStatus(udp=True)
+                self.mav.sendPositionTargets(
+                        timestamp,
+                        setpoint, 
+                        udp=True
+                        )
+                #arm_env_ids signals which env can be armed
+                arm_env_ids = (~self.grace_armed_mask).nonzero(as_tuple=True)[0].tolist()
+                #disarm_env_ids signals which env should be kept disarmed
+                disarm_env_ids = self.grace_armed_mask.nonzero(as_tuple=True)[0].tolist()
+                self.mav.arm(force=False, udp=True, env_ids=arm_env_ids)
+                self.mav.disarm(force=False, udp=True, env_ids=disarm_env_ids)
+                _temp_odom = torch.as_tensor(
+                        self.mav.recvOdometry(udp=True),
+                        device=self.device,
+                        dtype=torch.float32,)
+                #print(_temp_odom)
+            #use simulation state and controller for not sitl
+            else:
+                obs = torch.cat([
+                    pos, #more testing for independent pos/ remove it from training input
+                    lin_vel,
+                    quat_frd,
+                    ang_vel,
+                    acc,
+                    gyro,
+                    self.drone.controller.thrust, #TODO : test with normalised thrust
+                    setpoint,
+                ], dim=1)  # (N, dim)
+                self.drone.controller.step(desired_pos=setpoint, states=obs[:, :13], dt=1.0/self.sampling_freq, physics_dt=self.cfg.sim.dt)
 
             valid = self.step_idx < self.seq_len  # (N,)
             idx = self.step_idx[valid]
-            
-            obs = torch.cat([
-                pos/3.0,
-                lin_vel/0.8,
-                quat_frd,
-                ang_vel/0.5,
-                acc/25.0,
-                self.drone.controller.thrust/9.81, #TODO : test with normalised thrust
-                setpoint/3.0,
-            ], dim=1)  # (N, dim)
-
+            if self.sitl:
+                obs = torch.cat([
+                    _temp_odom[..., :3]/3.0,
+                    _temp_odom[..., 3:6]/0.8,
+                    _temp_odom[..., 6:10],
+                    _temp_odom[..., 10:13]/0.5,
+                    acc/25.0,
+                    actuation_t,
+                    setpoint/3.0,
+                ], dim=1)  # (N, dim)
+            else:
+                obs = torch.cat([
+                    pos/3.0,
+                    lin_vel/0.8,
+                    quat_frd,
+                    ang_vel/0.5,
+                    acc/25.0,
+                    self.drone.controller.thrust/9.81,
+                    setpoint/3.0,
+                ], dim=1)  # (N, dim)
             self.data[valid, idx] = obs[valid]
             self.step_idx[valid] += 1
-
 
 
     def _apply_action(self):
@@ -335,16 +375,9 @@ class DroneEnv(DirectRLEnv):
         self.drone.moment_noise = 2e-8 * (torch.randn_like(self.drone.controller.ve_moment, generator=self.rngen) * 0.09 + self.drone.controller.ve_moment.detach().clone())
 
         if self.sitl:
-            actuation = self.mav.recvActuation()
-            actuation_t = torch.tensor(actuation, device="cuda")
-            #print(actuation_t)
-            forces = torch.zeros(self.scene.num_envs,4, 3, device="cuda",)
-            forces[..., 2] = actuation_t * 13.5
-            moments = torch.zeros_like(forces)
-            moments[..., 2] = actuation_t * 0.09 * 13.5 
             self.scene.articulations["drone"].set_external_force_and_torque(
-                forces,
-                moments,
+                self.sitl_actuation[self.grace_armed_mask],
+                self.sitl_moment[self.grace_armed_mask],
                 body_ids=self.drone.rotor_ids[0],
                 is_global=False,
             )
@@ -356,10 +389,11 @@ class DroneEnv(DirectRLEnv):
                 is_global=False
                 )
 
+    #not used
     def _get_observations(self) -> dict:
         observations = {}
         return observations
-
+    #not used
     def _get_rewards(self) -> torch.Tensor:
         distance_to_goal = torch.linalg.norm(self.scene.articulations["drone"].data.root_pos_w, dim=1)
         distance_to_goal_mapped = 1 - torch.tanh(distance_to_goal / 0.8)
@@ -368,7 +402,7 @@ class DroneEnv(DirectRLEnv):
                 }
         reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
         return reward
-
+    #not used
     def _get_dones(self):
         drone = self.scene.articulations["drone"]
         angle = torch.acos((-drone.data.projected_gravity_b[:, 2]).clamp(-1.0, 1.0))
@@ -380,48 +414,56 @@ class DroneEnv(DirectRLEnv):
         if env_ids is None or len(env_ids) == self.num_envs:
             env_ids = self.scene.articulations["drone"]._ALL_INDICES
 
+        #reset px4 instances
+        if self.sitl:
+            env_list = env_ids.cpu().tolist()
+            self.mav.resetVehicle(
+                env_ids=env_list,
+                reboot=True,
+                force=True,
+                udp=False,
+            )
+            self.sitl_actuation = self.sitl_actuation * 0.0
+            self.sitl_moment = self.sitl_moment * 0.0
+
+            self.grace_period[env_ids] = True
+            self.grace_counter[env_ids] = 0
+
+        #dron physical properties randomisation
         self.event_manager.apply(mode="reset", env_ids=env_ids, global_env_step_count=self.common_step_counter)
 
+        #writing default states
         joint_pos = self.scene.articulations["drone"].data.default_joint_pos[env_ids].clone()
         joint_vel = self.scene.articulations["drone"].data.default_joint_vel[env_ids].clone()
         root_state = self.scene.articulations["drone"].data.default_root_state[env_ids].clone()
-
         root_state[:, 2] = torch.clamp(root_state[:, 2], min=0.0)
-
         self.scene.articulations["drone"].write_root_pose_to_sim(root_state[:, :7], env_ids)
         self.scene.articulations["drone"].write_root_velocity_to_sim(root_state[:, 7:], env_ids)
         self.scene.articulations["drone"].write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
 
         self.episode_length_buf[env_ids] = 0
-
         base_pos = self._terrain.env_origins[env_ids]
+
+        #reset ActionPrimitive
         self.primitive.reset(env_ids, self.scene.articulations["drone"].data.root_com_pos_w,)
 
-        #reset px4 instances
-        env_list = env_ids.cpu().tolist()
-        self.mav.resetVehicle(
-            env_ids=env_list,
-            reboot=True,
-        )
-
+        #log data
         for i in env_ids:
             if self.step_idx[i] < self.seq_len:
                 continue  
-
             t = self.data[i].detach().to("cpu", non_blocking=True).numpy()
             self.writer.write_episode(t)
-
             self.data[i].zero_()
             self.step_idx[i] = 0
 
+        #just to measuer time per batch
         self.t0=self.t1
         self.t1=time.perf_counter()
-
         print("time : ", self.t1 - self.t0)
-
         print("progress : ", self.writer.batch_idx, " out of ", self.writer.num_batch)
+
+        #condition for ending the data collection
         if self.writer.batch_idx >= self.writer.num_batch:
             print("Dataset complete. Stopping simulation...")
-
             self.writer.store.close()
             raise SystemExit

@@ -204,6 +204,8 @@ class DroneEnv(DirectRLEnv):
             self.grace_steps = int((2.0/4.0) / self.cfg.sim.dt)
             self.grace_armed_mask = torch.zeros(self.scene.num_envs, dtype=torch.bool)
 
+            self.arm_env_ids = (~self.grace_armed_mask).nonzero(as_tuple=True)[0].tolist()
+
         #mission planner
         self.rngen = torch.Generator(device="cuda").manual_seed(1)
         self.actgen = torch.Generator(device="cuda").manual_seed(10)
@@ -261,12 +263,12 @@ class DroneEnv(DirectRLEnv):
                 #be sent
                 self.grace_armed_mask = self.grace_period
 
-                if self.loop_counter % 4 == 0:
-                    print("arm ", self.mav.armed, 
-                          " grace_armed  ", self.grace_armed_mask,
-                          " grace_counter    ", self.grace_counter,
-                          " grace_steps    ", self.grace_steps
-                          )
+                #if self.loop_counter % 4 == 0:
+                #    print("arm ", self.mav.armed, 
+                #          " grace_armed  ", self.grace_armed_mask,
+                #          " grace_counter    ", self.grace_counter,
+                #          " grace_steps    ", self.grace_steps
+                #          )
                 self.drone.setpoint = self.primitive.step(self.scene.articulations["drone"].data.root_com_pos_w, active_mask=self.grace_armed_mask.to(self.device))
             else:
                 self.drone.setpoint = self.primitive.step(self.scene.articulations["drone"].data.root_com_pos_w)
@@ -323,7 +325,7 @@ class DroneEnv(DirectRLEnv):
                 #disarm_env_ids signals which env should be kept disarmed
                 disarm_env_ids = self.grace_armed_mask.nonzero(as_tuple=True)[0].tolist()
                 self.mav.arm(force=False, udp=True, env_ids=arm_env_ids)
-                self.mav.disarm(force=False, udp=True, env_ids=disarm_env_ids)
+                self.mav.disarm(force=True, udp=True, env_ids=disarm_env_ids)
                 _temp_odom = torch.as_tensor(
                         self.mav.recvOdometry(udp=True),
                         device=self.device,
@@ -376,8 +378,8 @@ class DroneEnv(DirectRLEnv):
 
         if self.sitl:
             self.scene.articulations["drone"].set_external_force_and_torque(
-                self.sitl_actuation[self.grace_armed_mask],
-                self.sitl_moment[self.grace_armed_mask],
+                self.sitl_actuation[self.arm_env_ids],
+                self.sitl_moment[self.arm_env_ids],
                 body_ids=self.drone.rotor_ids[0],
                 is_global=False,
             )

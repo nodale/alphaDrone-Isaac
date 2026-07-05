@@ -379,7 +379,6 @@ class QuickMavMulti:
             force=force,
             udp=udp,
         )
-        time.sleep(0.2)
         if reboot:
             self.rebootAutopilot(
                 env_ids=env_ids,
@@ -389,4 +388,3 @@ class QuickMavMulti:
             masters = self.udp_masters if udp else self.tcp_masters
             for idx in self._get_indices(env_ids):
                 masters[idx].wait_heartbeat(timeout=1e-4)
-        time.sleep(0.5)

@@ -253,7 +253,7 @@ class DroneEnv(DirectRLEnv):
                 actuation = self.mav.recvActuation()
                 actuation_t = torch.tensor(actuation, device=self.device)
 
-                self.sitl_actuation[..., 2] = actuation_t * 13.5
+                self.sitl_actuation[..., 2] = actuation_t * 12.5
                 self.sitl_moment[..., 2] = self.sitl_actuation[..., 2] * 0.09
                 self.sitl_moment[..., 0] *= -1.0
                 self.sitl_moment[..., 2] *= -1.0
@@ -262,14 +262,15 @@ class DroneEnv(DirectRLEnv):
                 #grace_armed_mask signals the script when the arming command is allowed to
                 #be sent
                 self.grace_armed_mask = self.grace_period
-
+                self.arm_env_ids = (~self.grace_armed_mask).nonzero(as_tuple=True)[0].tolist()
                 #if self.loop_counter % 4 == 0:
                 #    print("arm ", self.mav.armed, 
                 #          " grace_armed  ", self.grace_armed_mask,
                 #          " grace_counter    ", self.grace_counter,
                 #          " grace_steps    ", self.grace_steps
                 #          )
-                self.drone.setpoint = self.primitive.step(self.scene.articulations["drone"].data.root_com_pos_w, active_mask=self.grace_armed_mask.to(self.device))
+
+                self.drone.setpoint = self.primitive.step(self.scene.articulations["drone"].data.root_com_pos_w, active_mask=(~self.grace_armed_mask).to(self.device))
             else:
                 self.drone.setpoint = self.primitive.step(self.scene.articulations["drone"].data.root_com_pos_w)
 
@@ -308,6 +309,9 @@ class DroneEnv(DirectRLEnv):
                         acc,
                         gyro,
                         )
+                #TODO : send odometry per environment, and potentially only during
+                #the grace period
+                #TODO : also collect data on pure EKF2
                 self.mav.sendOdometry(
                         timestamp,
                         pos,
@@ -320,9 +324,8 @@ class DroneEnv(DirectRLEnv):
                         setpoint, 
                         udp=True
                         )
-                #arm_env_ids signals which env can be armed
-                arm_env_ids = (~self.grace_armed_mask).nonzero(as_tuple=True)[0].tolist()
-                self.mav.arm(force=False, udp=True, env_ids=arm_env_ids)
+                #self.arm_env_ids signals which env can be armed
+                self.mav.arm(force=False, udp=True, env_ids=self.arm_env_ids)
                 #disarm_env_ids signals which env should be kept disarmed
                 disarm_env_ids = self.grace_armed_mask.nonzero(as_tuple=True)[0].tolist()
                 self.mav.disarm(force=True, udp=True, env_ids=disarm_env_ids)
@@ -330,7 +333,7 @@ class DroneEnv(DirectRLEnv):
                         self.mav.recvOdometry(udp=True),
                         device=self.device,
                         dtype=torch.float32,)
-                print(_temp_odom[...,3])
+                print(_temp_odom[..., 2])
             #use simulation state and controller for not sitl
             else:
                 obs = torch.cat([
@@ -340,7 +343,7 @@ class DroneEnv(DirectRLEnv):
                     ang_vel,
                     acc,
                     gyro,
-                    self.drone.controller.thrust, #TODO : test with normalised thrust
+                    self.drone.controller.thrust,
                     setpoint,
                 ], dim=1)  # (N, dim)
                 self.drone.controller.step(desired_pos=setpoint, states=obs[:, :13], dt=1.0/self.sampling_freq, physics_dt=self.cfg.sim.dt)
@@ -424,7 +427,7 @@ class DroneEnv(DirectRLEnv):
                 env_ids=env_list,
                 reboot=True,
                 force=True,
-                udp=False,
+                udp=True,
             )
             self.sitl_actuation = self.sitl_actuation * 0.0
             self.sitl_moment = self.sitl_moment * 0.0

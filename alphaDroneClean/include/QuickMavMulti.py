@@ -307,23 +307,6 @@ class QuickMavMulti:
 
         return self.last_actuation[..., :4].copy()
 
-    #def recvArmStatus(self, udp=False):
-    #    masters = self.udp_masters if udp else self.tcp_masters
-    #    armed = torch.zeros(self.num_envs, dtype=torch.bool)
-    #    for i, master in enumerate(masters):
-    #        msg = master.recv_match(
-    #            type="HIL_ACTUATOR_CONTROLS",
-    #            blocking=False,
-    #        )
-    #        if msg is not None:
-    #            print(msg.mode)
-    #            #if b == 1:
-    #            #    armed[i] = True
-    #            #else:
-    #            #    armed[i] = False
-
-    #    return armed
-
     def recvOdometry(self, udp=False):
         masters = self.udp_masters if udp else self.tcp_masters
         for i, master in enumerate(masters):
@@ -333,10 +316,10 @@ class QuickMavMulti:
                     msg.x,
                     msg.y,
                     msg.z,
-                    *msg.q,           # [w, x, y, z]
                     msg.vx,
                     msg.vy,
                     msg.vz,
+                    *msg.q,           # [w, x, y, z]
                     msg.rollspeed,
                     msg.pitchspeed,
                     msg.yawspeed,
@@ -403,16 +386,7 @@ class QuickMavMulti:
                 force=force,
                 udp=udp,
             )
-            #
-            # Wait until PX4 has rebooted and starts sending
-            # heartbeats again.
-            #
             masters = self.udp_masters if udp else self.tcp_masters
             for idx in self._get_indices(env_ids):
                 masters[idx].wait_heartbeat(timeout=1e-4)
         time.sleep(0.5)
-        #self.arm(
-        #    env_ids=env_ids,
-        #    force=force,
-        #    udp=udp,
-        #)

@@ -174,7 +174,9 @@ class DroneEnv(DirectRLEnv):
         #data writer
         self.n_dim = 23
         self.max_iter = 1000
-        self.seq_len = int(self.cfg.episode_length_s / self.cfg.sim.dt)
+        self.sampling_freq = 200.0
+        self.steps_per_sample = int(round(1.0 / (self.cfg.sim.dt * self.sampling_freq)))
+        self.seq_len = int((self.cfg.episode_length_s/self.steps_per_sample) / self.cfg.sim.dt)
         self.writer = DataWriter(num_batch=self.max_iter, seq_len=self.seq_len, n_dim=self.n_dim)
         self.t1 = 1.0
         self.t0 = 0.0
@@ -184,8 +186,6 @@ class DroneEnv(DirectRLEnv):
         self.step_idx = torch.zeros(self.scene.num_envs, dtype=torch.long, device="cpu")
         self.drone.rotor_ids = self.scene.articulations["drone"].find_bodies("rotor_[1-4]")
         self.loop_counter = 1
-        self.sampling_freq = 200.0
-        self.steps_per_sample = int(round(1.0 / (self.cfg.sim.dt * self.sampling_freq)))
 
         #for SITL mavlink com
         self.sitl = True
@@ -322,15 +322,15 @@ class DroneEnv(DirectRLEnv):
                         )
                 #arm_env_ids signals which env can be armed
                 arm_env_ids = (~self.grace_armed_mask).nonzero(as_tuple=True)[0].tolist()
+                self.mav.arm(force=False, udp=True, env_ids=arm_env_ids)
                 #disarm_env_ids signals which env should be kept disarmed
                 disarm_env_ids = self.grace_armed_mask.nonzero(as_tuple=True)[0].tolist()
-                self.mav.arm(force=False, udp=True, env_ids=arm_env_ids)
                 self.mav.disarm(force=True, udp=True, env_ids=disarm_env_ids)
                 _temp_odom = torch.as_tensor(
                         self.mav.recvOdometry(udp=True),
                         device=self.device,
                         dtype=torch.float32,)
-                #print(_temp_odom)
+                print(_temp_odom[...,3])
             #use simulation state and controller for not sitl
             else:
                 obs = torch.cat([
@@ -345,6 +345,7 @@ class DroneEnv(DirectRLEnv):
                 ], dim=1)  # (N, dim)
                 self.drone.controller.step(desired_pos=setpoint, states=obs[:, :13], dt=1.0/self.sampling_freq, physics_dt=self.cfg.sim.dt)
 
+            #print("step_idx     ", self.step_idx, "  seq_len    ", self.seq_len)
             valid = self.step_idx < self.seq_len  # (N,)
             idx = self.step_idx[valid]
             if self.sitl:

@@ -118,7 +118,7 @@ class DroneSceneCfg(InteractiveSceneCfg):
 
 @configclass
 class DroneEnvCfg(DirectRLEnvCfg):
-    episode_length_s = 5.0
+    episode_length_s = 25.0
     decimation = 1
     action_space = 4
     observation_space = 6
@@ -173,11 +173,12 @@ class DroneEnv(DirectRLEnv):
 
         #data writer
         self.n_dim = 23
-        self.max_iter = 1000
+        self.max_iter = 10000
         self.sampling_freq = 200.0
         self.steps_per_sample = int(round(1.0 / (self.cfg.sim.dt * self.sampling_freq)))
         self.seq_len = int((self.cfg.episode_length_s/self.steps_per_sample) / self.cfg.sim.dt)
-        self.writer = DataWriter(num_batch=self.max_iter, seq_len=self.seq_len, n_dim=self.n_dim)
+        self.writer = DataWriter(path='/media/egghead/Scratch/joey/simulation_data/patient_one_data.zarr/', num_batch=self.max_iter, seq_len=self.seq_len, n_dim=self.n_dim)
+        #writer_gt only for sitl
         self.t1 = 1.0
         self.t0 = 0.0
 
@@ -188,7 +189,7 @@ class DroneEnv(DirectRLEnv):
         self.loop_counter = 1
 
         #for SITL mavlink com
-        self.sitl = True
+        self.sitl = False
         if self.sitl:
             self.mav = QuickMavMulti(
                     num_envs=self.scene.num_envs,
@@ -205,10 +206,15 @@ class DroneEnv(DirectRLEnv):
             self.grace_armed_mask = torch.zeros(self.scene.num_envs, dtype=torch.bool)
 
             self.arm_env_ids = (~self.grace_armed_mask).nonzero(as_tuple=True)[0].tolist()
+            self.disarm_env_ids = self.grace_armed_mask.nonzero(as_tuple=True)[0].tolist()
+
+            self.data_ekf = torch.zeros(self.scene.num_envs, self.seq_len, self.n_dim, device="cuda")
+            self.writer_ekf = DataWriter(path='/media/egghead/Scratch/joey/simulation_data/patient_three_data.zarr/', num_batch=self.max_iter, seq_len=self.seq_len, n_dim=self.n_dim)
 
         #mission planner
         self.rngen = torch.Generator(device="cuda").manual_seed(1)
         self.actgen = torch.Generator(device="cuda").manual_seed(10)
+        self.noise_scale = torch.ones(self.scene.num_envs, 1, 1, device="cuda")
         self.primitive = ActionPrimitive(
             actions=[
                 RandomWalk,
@@ -219,7 +225,7 @@ class DroneEnv(DirectRLEnv):
             num_envs=self.scene.num_envs,
             device="cuda",
             min_duration=100,
-            max_duration=800,
+            max_duration=400,
             generator=self.actgen
         )
 
@@ -258,17 +264,13 @@ class DroneEnv(DirectRLEnv):
                 self.sitl_moment[..., 0] *= -1.0
                 self.sitl_moment[..., 2] *= -1.0
 
-                #self.grace_armed_mask = self.mav.armed & ~self.grace_period
                 #grace_armed_mask signals the script when the arming command is allowed to
                 #be sent
                 self.grace_armed_mask = self.grace_period
+                #self.arm_env_ids signals which env can be armed
                 self.arm_env_ids = (~self.grace_armed_mask).nonzero(as_tuple=True)[0].tolist()
-                #if self.loop_counter % 4 == 0:
-                #    print("arm ", self.mav.armed, 
-                #          " grace_armed  ", self.grace_armed_mask,
-                #          " grace_counter    ", self.grace_counter,
-                #          " grace_steps    ", self.grace_steps
-                #          )
+                #disarm_env_ids signals which env should be kept disarmed
+                self.disarm_env_ids = self.grace_armed_mask.nonzero(as_tuple=True)[0].tolist()
 
                 self.drone.setpoint = self.primitive.step(self.scene.articulations["drone"].data.root_com_pos_w, active_mask=(~self.grace_armed_mask).to(self.device))
             else:
@@ -311,24 +313,22 @@ class DroneEnv(DirectRLEnv):
                         )
                 #TODO : send odometry per environment, and potentially only during
                 #the grace period
-                #TODO : also collect data on pure EKF2
-                self.mav.sendOdometry(
-                        timestamp,
-                        pos,
-                        quat_frd,
-                        lin_vel,
-                        ang_vel,
-                        )
+                #TODO : also collect data on pure EKF2, the pipeline for data_writer is already there
+                #self.mav.sendOdometry(
+                #        timestamp,
+                #        pos,
+                #        quat_frd,
+                #        lin_vel,
+                #        ang_vel,
+                #        env_ids=self.mav.disarm()
+                #        )
                 self.mav.sendPositionTargets(
                         timestamp,
                         setpoint, 
                         udp=True
                         )
-                #self.arm_env_ids signals which env can be armed
                 self.mav.arm(force=False, udp=True, env_ids=self.arm_env_ids)
-                #disarm_env_ids signals which env should be kept disarmed
-                disarm_env_ids = self.grace_armed_mask.nonzero(as_tuple=True)[0].tolist()
-                self.mav.disarm(force=True, udp=True, env_ids=disarm_env_ids)
+                self.mav.disarm(force=True, udp=True, env_ids=self.disarm_env_ids)
                 _temp_odom = torch.as_tensor(
                         self.mav.recvOdometry(udp=True),
                         device=self.device,
@@ -342,7 +342,6 @@ class DroneEnv(DirectRLEnv):
                     quat_frd,
                     ang_vel,
                     acc,
-                    gyro,
                     self.drone.controller.thrust,
                     setpoint,
                 ], dim=1)  # (N, dim)
@@ -352,7 +351,7 @@ class DroneEnv(DirectRLEnv):
             valid = self.step_idx < self.seq_len  # (N,)
             idx = self.step_idx[valid]
             if self.sitl:
-                obs = torch.cat([
+                obs_ekf = torch.cat([
                     _temp_odom[..., :3]/3.0,
                     _temp_odom[..., 3:6]/0.8,
                     _temp_odom[..., 6:10],
@@ -361,6 +360,19 @@ class DroneEnv(DirectRLEnv):
                     actuation_t,
                     setpoint/3.0,
                 ], dim=1)  # (N, dim)
+                self.data_ekf[valid, idx] = obs_ekf[valid]
+
+                obs = torch.cat([
+                    pos/3.0,
+                    lin_vel/0.8,
+                    quat_frd,
+                    ang_vel/0.5,
+                    acc/25.0,
+                    self.drone.controller.thrust/9.81,
+                    setpoint/3.0,
+                ], dim=1)  # (N, dim)
+                self.data[valid, idx] = obs[valid]
+                self.step_idx[valid] += 1
             else:
                 obs = torch.cat([
                     pos/3.0,
@@ -371,14 +383,14 @@ class DroneEnv(DirectRLEnv):
                     self.drone.controller.thrust/9.81,
                     setpoint/3.0,
                 ], dim=1)  # (N, dim)
-            self.data[valid, idx] = obs[valid]
-            self.step_idx[valid] += 1
+                self.data[valid, idx] = obs[valid]
+                self.step_idx[valid] += 1
 
 
     def _apply_action(self):
         #noise/disturbance, uses a scaler here
-        self.drone.thrust_noise = 2e-8 * (torch.randn_like(self.drone.controller.ve_thrust, generator=self.rngen) + self.drone.controller.ve_thrust.detach().clone())
-        self.drone.moment_noise = 2e-8 * (torch.randn_like(self.drone.controller.ve_moment, generator=self.rngen) * 0.09 + self.drone.controller.ve_moment.detach().clone())
+        self.drone.thrust_noise = self.noise_scale * (torch.randn_like(self.drone.controller.ve_thrust, generator=self.rngen) + self.drone.controller.ve_thrust.detach().clone())
+        self.drone.moment_noise = self.noise_scale * (torch.randn_like(self.drone.controller.ve_moment, generator=self.rngen) * 0.09 + self.drone.controller.ve_moment.detach().clone())
 
         if self.sitl:
             self.scene.articulations["drone"].set_external_force_and_torque(
@@ -412,13 +424,16 @@ class DroneEnv(DirectRLEnv):
     def _get_dones(self):
         drone = self.scene.articulations["drone"]
         angle = torch.acos((-drone.data.projected_gravity_b[:, 2]).clamp(-1.0, 1.0))
-        died = angle > torch.deg2rad(torch.tensor(80.0, device=angle.device))
+        died = angle > torch.deg2rad(torch.tensor(160.0, device=angle.device))
         time_out = self.episode_length_buf >= self.max_episode_length
         return died, time_out
 
     def _reset_idx(self, env_ids: torch.Tensor | None):
         if env_ids is None or len(env_ids) == self.num_envs:
-            env_ids = self.scene.articulations["drone"]._ALL_INDICES
+            env_ids = self.scene.articulations["drone"]._ALL_INDICES    
+
+        #reset the random noise scaler
+        self.noise_scale[env_ids] = torch.empty(len(env_ids), 1, 1, device=self.device).uniform_(1e-5, 1e-1, generator=self.rngen)
 
         #reset px4 instances
         if self.sitl:
@@ -459,6 +474,9 @@ class DroneEnv(DirectRLEnv):
                 continue  
             t = self.data[i].detach().to("cpu", non_blocking=True).numpy()
             self.writer.write_episode(t)
+            if self.sitl:
+                t_ekf = self.data_ekf[i].detach().to("cpu", non_blocking=True).numpy()
+                self.writer_ekf.write_episode(t_ekf)
             self.data[i].zero_()
             self.step_idx[i] = 0
 

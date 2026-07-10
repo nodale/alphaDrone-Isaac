@@ -16,9 +16,9 @@
       </geometry>
     </collision>
     <inertial>
-      <mass value="3.650"/>
-      <inertia ixx="0.093" iyy="0.078" izz="0.132" ixy="0" ixz="0" iyz="0"/>
-      <origin xyz="0.0096 -0.00008 -0.07219" rpy="0 0 0"/>
+      <mass value="3.683"/>
+      <inertia ixx="0.076" iyy="0.064" izz="0.104" ixy="0.016" ixz="0" iyz="0.001"/>
+      <origin xyz="-0.003 -0.001 0.009" rpy="0 0 0"/>
     </inertial>
   </link>
 

@@ -7,8 +7,8 @@
                 double radius = 5
             }
             dictionary Perspective = {
-                double3 position = (-0.4792194041478371, -0.33045905819029453, 0.19126600201191096)
-                double3 target = (0.6670697115305093, 0.6436918740897148, -0.3402057976266531)
+                double3 position = (-0.06584663815014904, -0.04260158663928741, 0.5249449831261018)
+                double3 target = (-0.06414668717155002, 0.03382225508562868, -1.253172305965803)
             }
             dictionary Right = {
                 double3 position = (0, -5, 0)
@@ -118,7 +118,6 @@ over "quadrotor" (
             displayName = "Name Override"
             doc = "Name override for prim lookup in base name search"
         )
-        float physics:mass = 3.6000001
 
         def IsaacImuSensor "IMU"
         {
@@ -130,7 +129,7 @@ over "quadrotor" (
             token visibility = "invisible"
             quatd xformOp:orient = (1, 0, 0, 0)
             double3 xformOp:scale = (1, 1, 1)
-            double3 xformOp:translate = (0.0096, 0.00008, 0.07219)
+            double3 xformOp:translate = (-0.0096, -0.00008, 0.07219)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }

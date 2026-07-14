@@ -23,6 +23,17 @@ from data.writer import DataWriter
 from sitl.mavlink import QuickMavMulti
 
 
+# Vibration model: quadratic sigma(T) = d·T² + e·T + f, clamped to floor [g]
+# Parameters fitted from thrust_log.csv via thesis_tools/vibration_model.py
+_VIB_T_MAX = 13.0  # N — model extrapolation limit
+_VIB_SIGMA_X = (-0.01168,  0.11088, -0.02476, 0.01638)  # (d, e, f, floor)
+_VIB_SIGMA_Y = (-0.00363,  0.03557,  0.03776, 0.02099)
+_VIB_SIGMA_Z = ( 0.00052,  0.00402,  0.04676, 0.01606)
+
+def _vib_sigma(T: torch.Tensor, d: float, e: float, f: float, floor: float) -> torch.Tensor:
+    return torch.clamp(d * T**2 + e * T + f, min=floor)
+
+
 class DroneEnvWindow(BaseEnvWindow):
     def __init__(self, env: DroneEnv, window_name: str = "IsaacLab"):
         super().__init__(env, window_name)
@@ -168,6 +179,7 @@ class DroneEnv(DirectRLEnv):
             )
 
         self.rngen = torch.Generator(device="cuda").manual_seed(1)
+        self.vib_rngen = torch.Generator(device="cuda").manual_seed(2)
         self.actgen = torch.Generator(device="cuda").manual_seed(10)
         self.noise_scale = torch.ones(self.scene.num_envs, 1, 1, device="cuda")
         self.primitive = ActionPrimitive(
@@ -305,6 +317,16 @@ class DroneEnv(DirectRLEnv):
             + self.drone.controller.ve_moment.detach().clone()
         )
 
+        T = self.drone.controller.ve_thrust[..., 2].sum(dim=1).clamp(0.0, _VIB_T_MAX)
+        sig = torch.stack([
+            _vib_sigma(T, *_VIB_SIGMA_X),
+            _vib_sigma(T, *_VIB_SIGMA_Y),
+            _vib_sigma(T, *_VIB_SIGMA_Z),
+        ], dim=1).unsqueeze(1)  # (num_envs, 1, 3)
+        vib = torch.randn(self.scene.num_envs, 4, 3, device=self.device, generator=self.vib_rngen) * sig
+        self.drone.thrust_noise += self.noise_scale * vib
+        self.drone.moment_noise += self.noise_scale * vib * 0.09
+
         if self.sitl:
             self.scene.articulations["drone"].set_external_force_and_torque(
                 self.sitl_actuation[self.arm_env_ids],
@@ -344,7 +366,7 @@ class DroneEnv(DirectRLEnv):
 
         self.noise_scale[env_ids] = torch.empty(
             len(env_ids), 1, 1, device=self.device
-        ).uniform_(1e-5, 1e-1, generator=self.rngen)
+        ).uniform_(1e-2, 2, generator=self.rngen)
 
         if self.sitl:
             env_list = env_ids.cpu().tolist()

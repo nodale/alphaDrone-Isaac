@@ -18,7 +18,10 @@ from isaaclab.utils import configclass
 import isaaclab.envs.mdp as mdp
 
 from env.drone_asset import Drone
-from planner.primitives import ActionPrimitive, HoldPosition, RandomWalk, RandomSphereOffset
+from planner.primitives import (
+    ActionPrimitive, HoldPosition, RandomWalk, RandomSphereOffset,
+    CircularOrbit, HelixClimb, LissajousPath, ZigZag, SinusoidalWalk,
+)
 from data.writer import DataWriter
 from sitl.mavlink import QuickMavMulti
 
@@ -183,7 +186,8 @@ class DroneEnv(DirectRLEnv):
         self.actgen = torch.Generator(device="cuda").manual_seed(10)
         self.noise_scale = torch.ones(self.scene.num_envs, 1, 1, device="cuda")
         self.primitive = ActionPrimitive(
-            actions=[RandomWalk, RandomSphereOffset, HoldPosition],
+            actions=[RandomWalk, RandomSphereOffset, HoldPosition,
+                     CircularOrbit, HelixClimb, LissajousPath, ZigZag, SinusoidalWalk],
             dim=3,
             num_envs=self.scene.num_envs,
             device="cuda",
@@ -308,14 +312,14 @@ class DroneEnv(DirectRLEnv):
             self.step_idx[valid] += 1
 
     def _apply_action(self):
-        self.drone.thrust_noise = self.noise_scale * (
-            torch.randn_like(self.drone.controller.ve_thrust, generator=self.rngen)
-            + self.drone.controller.ve_thrust.detach().clone()
-        )
-        self.drone.moment_noise = self.noise_scale * (
-            torch.randn_like(self.drone.controller.ve_moment, generator=self.rngen) * 0.09
-            + self.drone.controller.ve_moment.detach().clone()
-        )
+        #self.drone.thrust_noise = self.noise_scale * (
+        #    torch.randn_like(self.drone.controller.ve_thrust, generator=self.rngen)
+        #    + self.drone.controller.ve_thrust.detach().clone()
+        #)
+        #self.drone.moment_noise = self.noise_scale * (
+        #    torch.randn_like(self.drone.controller.ve_moment, generator=self.rngen) * 0.09
+        #    + self.drone.controller.ve_moment.detach().clone()
+        #)
 
         T = self.drone.controller.ve_thrust[..., 2].sum(dim=1).clamp(0.0, _VIB_T_MAX)
         sig = torch.stack([
@@ -324,8 +328,8 @@ class DroneEnv(DirectRLEnv):
             _vib_sigma(T, *_VIB_SIGMA_Z),
         ], dim=1).unsqueeze(1)  # (num_envs, 1, 3)
         vib = torch.randn(self.scene.num_envs, 4, 3, device=self.device, generator=self.vib_rngen) * sig
-        self.drone.thrust_noise += self.noise_scale * vib
-        self.drone.moment_noise += self.noise_scale * vib * 0.09
+        self.drone.thrust_noise = self.noise_scale * vib
+        self.drone.moment_noise = self.noise_scale * vib * 0.09
 
         if self.sitl:
             self.scene.articulations["drone"].set_external_force_and_torque(
@@ -366,7 +370,7 @@ class DroneEnv(DirectRLEnv):
 
         self.noise_scale[env_ids] = torch.empty(
             len(env_ids), 1, 1, device=self.device
-        ).uniform_(1e-2, 2, generator=self.rngen)
+        ).uniform_(1e-2, 3, generator=self.rngen)
 
         if self.sitl:
             env_list = env_ids.cpu().tolist()

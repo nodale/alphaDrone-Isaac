@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+import math
 import torch
 
 
@@ -102,6 +103,162 @@ class RandomSphereOffset(Action):
 
     def step(self, ids, tau, out):
         out[ids] = self.target[ids]
+
+
+class CircularOrbit(Action):
+    """Horizontal circle centred at start_pos. Produces sustained centripetal acceleration."""
+
+    def __init__(self, num_envs, dim, device, min_radius=0.3, max_radius=1.2,
+                 min_laps=0.5, max_laps=2.0):
+        super().__init__(num_envs, dim, device)
+        self.min_radius = min_radius
+        self.max_radius = max_radius
+        self.min_laps = min_laps
+        self.max_laps = max_laps
+        self.center = torch.zeros(num_envs, dim, device=device)
+        self.radius = torch.zeros(num_envs, device=device)
+        self.total_angle = torch.zeros(num_envs, device=device)
+
+    def reset(self, ids, start_pos, generator):
+        n = ids.numel()
+        r = self.min_radius + (self.max_radius - self.min_radius) * \
+            torch.rand(n, generator=generator, device=self.device)
+        laps = self.min_laps + (self.max_laps - self.min_laps) * \
+            torch.rand(n, generator=generator, device=self.device)
+        sign = (torch.rand(n, generator=generator, device=self.device) > 0.5).float() * 2 - 1
+        self.center[ids] = start_pos
+        self.radius[ids] = r
+        self.total_angle[ids] = laps * 2 * math.pi * sign
+
+    def step(self, ids, tau, out):
+        t = tau[ids]
+        phi = self.total_angle[ids] * t
+        r = self.radius[ids]
+        out[ids, 0] = self.center[ids, 0] + r * torch.cos(phi)
+        out[ids, 1] = self.center[ids, 1] + r * torch.sin(phi)
+        out[ids, 2] = self.center[ids, 2]
+
+
+class HelixClimb(Action):
+    """Ascending/descending spiral: circular XY motion + linear Z ramp."""
+
+    def __init__(self, num_envs, dim, device, min_radius=0.2, max_radius=0.8,
+                 min_laps=0.5, max_laps=1.5, min_dz=0.2, max_dz=1.0):
+        super().__init__(num_envs, dim, device)
+        self.min_radius = min_radius
+        self.max_radius = max_radius
+        self.min_laps = min_laps
+        self.max_laps = max_laps
+        self.min_dz = min_dz
+        self.max_dz = max_dz
+        self.center = torch.zeros(num_envs, dim, device=device)
+        self.radius = torch.zeros(num_envs, device=device)
+        self.total_angle = torch.zeros(num_envs, device=device)
+        self.dz = torch.zeros(num_envs, device=device)
+
+    def reset(self, ids, start_pos, generator):
+        n = ids.numel()
+        r = self.min_radius + (self.max_radius - self.min_radius) * \
+            torch.rand(n, generator=generator, device=self.device)
+        laps = self.min_laps + (self.max_laps - self.min_laps) * \
+            torch.rand(n, generator=generator, device=self.device)
+        sign = (torch.rand(n, generator=generator, device=self.device) > 0.5).float() * 2 - 1
+        dz = self.min_dz + (self.max_dz - self.min_dz) * \
+            torch.rand(n, generator=generator, device=self.device)
+        dz_sign = (torch.rand(n, generator=generator, device=self.device) > 0.5).float() * 2 - 1
+        self.center[ids] = start_pos
+        self.radius[ids] = r
+        self.total_angle[ids] = laps * 2 * math.pi * sign
+        self.dz[ids] = dz * dz_sign
+
+    def step(self, ids, tau, out):
+        t = tau[ids]
+        phi = self.total_angle[ids] * t
+        r = self.radius[ids]
+        out[ids, 0] = self.center[ids, 0] + r * torch.cos(phi)
+        out[ids, 1] = self.center[ids, 1] + r * torch.sin(phi)
+        out[ids, 2] = self.center[ids, 2] + self.dz[ids] * t
+
+
+class LissajousPath(Action):
+    """3D Lissajous figure with incommensurate frequency ratios across all three axes."""
+
+    _FREQ_RATIOS = ((1, 2, 3), (2, 3, 5), (3, 4, 7), (1, 3, 5))
+
+    def __init__(self, num_envs, dim, device, amplitude=0.6):
+        super().__init__(num_envs, dim, device)
+        self.amplitude = amplitude
+        self.center = torch.zeros(num_envs, dim, device=device)
+        self.amp = torch.zeros(num_envs, dim, device=device)
+        self.freq = torch.zeros(num_envs, dim, device=device)
+        self.phase = torch.zeros(num_envs, dim, device=device)
+        self._freq_table = torch.tensor(self._FREQ_RATIOS, dtype=torch.float32, device=device)
+
+    def reset(self, ids, start_pos, generator):
+        n = ids.numel()
+        self.center[ids] = start_pos
+        self.amp[ids] = self.amplitude * (0.5 + 0.5 * torch.rand(
+            n, self.dim, generator=generator, device=self.device))
+        ratio_idx = torch.randint(0, len(self._FREQ_RATIOS), (n,),
+                                  generator=generator, device=self.device)
+        self.freq[ids] = self._freq_table[ratio_idx]
+        self.phase[ids] = torch.rand(n, self.dim, generator=generator,
+                                     device=self.device) * 2 * math.pi
+
+    def step(self, ids, tau, out):
+        t = tau[ids].unsqueeze(-1)
+        out[ids] = self.center[ids] + self.amp[ids] * torch.sin(
+            2 * math.pi * self.freq[ids] * t + self.phase[ids])
+
+
+class ZigZag(Action):
+    """Bounces between two random waypoints using a triangle wave, producing sharp reversals."""
+
+    def __init__(self, num_envs, dim, device, segment_length=0.6, num_bounces=3):
+        super().__init__(num_envs, dim, device)
+        self.segment_length = segment_length
+        self.num_bounces = num_bounces
+        self.p0 = torch.zeros(num_envs, dim, device=device)
+        self.p1 = torch.zeros(num_envs, dim, device=device)
+
+    def reset(self, ids, start_pos, generator):
+        n = ids.numel()
+        direction = torch.randn(n, self.dim, generator=generator, device=self.device)
+        direction[:, 2] *= 0.3
+        direction = direction / (direction.norm(dim=-1, keepdim=True) + 1e-8)
+        self.p0[ids] = start_pos
+        self.p1[ids] = start_pos + direction * self.segment_length
+
+    def step(self, ids, tau, out):
+        t_scaled = torch.fmod(tau[ids] * self.num_bounces, 1.0)
+        tri = (1 - torch.abs(2 * t_scaled - 1)).unsqueeze(-1)
+        out[ids] = self.p0[ids] + tri * (self.p1[ids] - self.p0[ids])
+
+
+class SinusoidalWalk(Action):
+    """High-velocity drift with a sinusoidal acceleration ripple layered on top."""
+
+    def __init__(self, num_envs, dim, device, vel_scale=2.0,
+                 modulation_freq=1.5, modulation_depth=0.4):
+        super().__init__(num_envs, dim, device)
+        self.vel_scale = vel_scale
+        self.modulation_freq = modulation_freq
+        self.modulation_depth = modulation_depth
+        self.p0 = torch.zeros(num_envs, dim, device=device)
+        self.vel = torch.zeros(num_envs, dim, device=device)
+
+    def reset(self, ids, start_pos, generator):
+        n = ids.numel()
+        self.p0[ids] = start_pos
+        self.vel[ids] = torch.randn(n, self.dim, generator=generator,
+                                    device=self.device) * self.vel_scale
+
+    def step(self, ids, tau, out):
+        t = tau[ids].unsqueeze(-1)
+        f = self.modulation_freq
+        d = self.modulation_depth
+        mod = t + (d / (2 * math.pi * f)) * (1 - torch.cos(2 * math.pi * f * t))
+        out[ids] = self.p0[ids] + self.vel[ids] * mod
 
 
 @dataclass

@@ -86,7 +86,7 @@ class QuickMavMulti:
                 quat[i].tolist(),
                 float(vel[i, 0]), float(vel[i, 1]), float(vel[i, 2]),
                 float(ang_vel[i, 0]), float(ang_vel[i, 1]), float(ang_vel[i, 2]),
-                [0.01] * 21, [0.01] * 21, 0, 0, 0,
+                [0.0001] * 21, [0.0001] * 21, 0, 0, 0,
             )
             master.mav.send(msg)
 

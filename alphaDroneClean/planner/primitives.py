@@ -35,7 +35,7 @@ class HoldPosition(Action):
 
 class RandomWalk(Action):
 
-    def __init__(self, num_envs, dim, device, vel_scale=1.0):
+    def __init__(self, num_envs, dim, device, vel_scale=0.2):
         super().__init__(num_envs, dim, device)
         self.vel_scale = vel_scale
         self.p0 = torch.zeros(num_envs, dim, device=device)
@@ -87,7 +87,7 @@ class CubicSpline(Action):
 
 class RandomSphereOffset(Action):
 
-    def __init__(self, num_envs, dim, device, min_radius=0.05, max_radius=0.5):
+    def __init__(self, num_envs, dim, device, min_radius=0.05, max_radius=0.2):
         super().__init__(num_envs, dim, device)
         self.min_radius = min_radius
         self.max_radius = max_radius
@@ -108,8 +108,8 @@ class RandomSphereOffset(Action):
 class CircularOrbit(Action):
     """Horizontal circle centred at start_pos. Produces sustained centripetal acceleration."""
 
-    def __init__(self, num_envs, dim, device, min_radius=0.3, max_radius=1.2,
-                 min_laps=0.5, max_laps=2.0):
+    def __init__(self, num_envs, dim, device, min_radius=0.05, max_radius=0.3,
+                 min_laps=0.2, max_laps=1.0):
         super().__init__(num_envs, dim, device)
         self.min_radius = min_radius
         self.max_radius = max_radius
@@ -142,8 +142,8 @@ class CircularOrbit(Action):
 class HelixClimb(Action):
     """Ascending/descending spiral: circular XY motion + linear Z ramp."""
 
-    def __init__(self, num_envs, dim, device, min_radius=0.2, max_radius=0.8,
-                 min_laps=0.5, max_laps=1.5, min_dz=0.2, max_dz=1.0):
+    def __init__(self, num_envs, dim, device, min_radius=0.05, max_radius=0.3,
+                 min_laps=0.2, max_laps=1.0, min_dz=0.02, max_dz=0.5):
         super().__init__(num_envs, dim, device)
         self.min_radius = min_radius
         self.max_radius = max_radius
@@ -214,7 +214,7 @@ class LissajousPath(Action):
 class ZigZag(Action):
     """Bounces between two random waypoints using a triangle wave, producing sharp reversals."""
 
-    def __init__(self, num_envs, dim, device, segment_length=0.6, num_bounces=3):
+    def __init__(self, num_envs, dim, device, segment_length=0.2, num_bounces=2):
         super().__init__(num_envs, dim, device)
         self.segment_length = segment_length
         self.num_bounces = num_bounces
@@ -238,7 +238,7 @@ class ZigZag(Action):
 class SinusoidalWalk(Action):
     """High-velocity drift with a sinusoidal acceleration ripple layered on top."""
 
-    def __init__(self, num_envs, dim, device, vel_scale=2.0,
+    def __init__(self, num_envs, dim, device, vel_scale=0.5,
                  modulation_freq=1.5, modulation_depth=0.4):
         super().__init__(num_envs, dim, device)
         self.vel_scale = vel_scale
@@ -270,8 +270,9 @@ class ActionPrimitive:
     device: str = "cuda"
     min_duration: int = 50
     max_duration: int = 200
-    min_xyz: tuple = (-2.5, -2.5, 0.8)
+    min_xyz: tuple = (-2.5, -2.5, 0.2)
     max_xyz: tuple = (2.5, 2.5, 2.5)
+    recenter: float = 0.15  # partial pull of the re-anchor point toward box center per switch
 
     def __post_init__(self):
         self.bank = [a(dim=self.dim, device=self.device, num_envs=self.num_envs) for a in self.actions]
@@ -280,11 +281,12 @@ class ActionPrimitive:
         self.t = torch.zeros(self.num_envs, device=self.device)
         self.duration = self._sample_duration()
 
-        all_envs = torch.arange(self.num_envs, device=self.device)
-        self._switch(all_envs, current_pos=torch.zeros(self.num_envs, self.dim, device=self.device))
-
         self.min_xyz = torch.tensor(self.min_xyz, device=self.device, dtype=torch.float32)
         self.max_xyz = torch.tensor(self.max_xyz, device=self.device, dtype=torch.float32)
+        self.center = (self.min_xyz + self.max_xyz) / 2
+
+        all_envs = torch.arange(self.num_envs, device=self.device)
+        self._switch(all_envs, current_pos=torch.zeros(self.num_envs, self.dim, device=self.device))
 
     def _sample_duration(self):
         return torch.randint(
@@ -305,11 +307,19 @@ class ActionPrimitive:
             self.min_duration, self.max_duration,
             (env_ids.numel(),), generator=self.generator, device=self.device,
         )
+
+        # Bound the re-anchor point to the box, then pull it gently toward center so
+        # segment-to-segment excursions can't accumulate into unbounded drift. This is
+        # a partial blend (not a reset): each primitive still samples its own random
+        # motion around this anchor, so trajectories stay varied.
+        anchor = torch.max(torch.min(current_pos, self.max_xyz), self.min_xyz)
+        anchor = (1.0 - self.recenter) * anchor + self.recenter * self.center
+
         for idx, action in enumerate(self.bank):
             mask = next_actions == idx
             if mask.any():
                 ids = env_ids[mask]
-                action.reset(ids=ids, start_pos=current_pos[ids], generator=self.generator)
+                action.reset(ids=ids, start_pos=anchor[ids], generator=self.generator)
 
     @torch.no_grad()
     def step(self, current_pos, active_mask=None):
@@ -335,6 +345,9 @@ class ActionPrimitive:
         above = out > self.max_xyz
         out[below] = 2 * self.min_xyz.expand_as(out)[below] - out[below]
         out[above] = 2 * self.max_xyz.expand_as(out)[above] - out[above]
+        # Hard clamp guarantees in-box even for excursions wider than the box, where a
+        # single reflection would otherwise land past the opposite wall.
+        out = torch.max(torch.min(out, self.max_xyz), self.min_xyz)
 
         return out
 

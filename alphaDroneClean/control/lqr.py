@@ -84,7 +84,7 @@ class Kxontroller:
         self.P_LQR = torch.tensor(params["P_LQR"], dtype=torch.float32, device=device)
 
         self.u_eq = torch.tensor(
-            [9.00545894, 8.9619036, 8.68197106, 8.7255264],
+            [9.37, 9.47, 8.89, 8.79],
             dtype=torch.float32,
             device=device,
         )

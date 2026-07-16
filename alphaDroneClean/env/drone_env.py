@@ -28,7 +28,7 @@ from sitl.mavlink import QuickMavMulti
 _SEED_MULT = 2
 # Vibration model: quadratic sigma(T) = d·T² + e·T + f, clamped to floor [g]
 # Parameters fitted from thrust_log.csv via thesis_tools/vibration_model.py
-_VIB_T_MAX = 12.0  # N — model extrapolation limit
+_VIB_T_MAX = 13.0  # N — model extrapolation limit
 _VIB_SIGMA_X = (-0.01168,  0.11088, -0.02476, 0.01638)  # (d, e, f, floor)
 _VIB_SIGMA_Y = (-0.00363,  0.03557,  0.03776, 0.02099)
 _VIB_SIGMA_Z = ( 0.00052,  0.00402,  0.04676, 0.01606)
@@ -82,7 +82,7 @@ class DroneSceneCfg(InteractiveSceneCfg):
 
 @configclass
 class DroneEnvCfg(DirectRLEnvCfg):
-    episode_length_s = 40.0
+    episode_length_s = 25.0
     decimation = 1
     action_space = 4
     observation_space = 6
@@ -140,7 +140,7 @@ class DroneEnv(DirectRLEnv):
         self.steps_per_sample = int(round(1.0 / (self.cfg.sim.dt * self.sampling_freq)))
         self.seq_len = int((self.cfg.episode_length_s / self.steps_per_sample) / self.cfg.sim.dt)
         self.writer = DataWriter(
-            path='/media/egghead/Scratch/joey/simulation_data/patient_two_data.zarr/',
+            path='/media/egghead/Scratch/joey/simulation_data/patient_one_data.zarr/',
             num_batch=self.max_iter,
             seq_len=self.seq_len,
             n_dim=self.n_dim,
@@ -227,7 +227,7 @@ class DroneEnv(DirectRLEnv):
                 # reproduces the thrust the controller intended (in Newtons).
                 #thrust_kgf = ((actuation_t - 0.03604325541483971) / 0.823789589308134).clamp(min=0.0) ** (1.0 / 0.578815510492838)
                 #self.sitl_actuation[..., 2] = thrust_kgf * 9.81
-                self.sitl_actuation[..., 2] = actuation_t * 12.5
+                self.sitl_actuation[..., 2] = actuation_t * 13.0
                 self.sitl_moment[..., 2] = self.sitl_actuation[..., 2] * 0.09
                 # rotors 1 and 3 counter-rotate (same convention as Kxontroller)
                 self.sitl_moment[:, 0, 2] *= -1.0
@@ -338,17 +338,18 @@ class DroneEnv(DirectRLEnv):
         #    + self.drone.controller.ve_moment.detach().clone()
         #)
 
-        T = self.drone.controller.ve_thrust[..., 2].sum(dim=1).clamp(0.0, _VIB_T_MAX)
-        sig = torch.stack([
-            _vib_sigma(T, *_VIB_SIGMA_X),
-            _vib_sigma(T, *_VIB_SIGMA_Y),
-            _vib_sigma(T, *_VIB_SIGMA_Z),
-        ], dim=1).unsqueeze(1)  # (num_envs, 1, 3)
-        vib = torch.randn(self.scene.num_envs, 4, 3, device=self.device, generator=self.vib_rngen) * sig
-        self.drone.thrust_noise = self.noise_scale * vib
-        self.drone.moment_noise = self.noise_scale * vib * 0.09
 
         if self.sitl:
+            T = self.sitl_actuation[..., 2].clamp(0.0, _VIB_T_MAX)  # (num_envs, 4)
+            sig = torch.stack([
+                _vib_sigma(T, *_VIB_SIGMA_X),
+                _vib_sigma(T, *_VIB_SIGMA_Y),
+                _vib_sigma(T, *_VIB_SIGMA_Z),
+            ], dim=2)  # (num_envs, 4, 3)
+            vib = torch.randn(self.scene.num_envs, 4, 3, device=self.device, generator=self.vib_rngen) * sig
+            self.drone.thrust_noise = self.noise_scale * vib
+            self.drone.moment_noise = self.noise_scale * vib * 0.09
+
             self.scene.articulations["drone"].set_external_force_and_torque(
                 self.sitl_actuation[self.arm_env_ids] + self.drone.thrust_noise[self.arm_env_ids],
                 self.sitl_moment[self.arm_env_ids] + self.drone.moment_noise[self.arm_env_ids],
@@ -356,6 +357,16 @@ class DroneEnv(DirectRLEnv):
                 is_global=False,
             )
         else:
+            T = self.drone.controller.ve_thrust[..., 2].clamp(0.0, _VIB_T_MAX)  # (num_envs, 4)
+            sig = torch.stack([
+                _vib_sigma(T, *_VIB_SIGMA_X),
+                _vib_sigma(T, *_VIB_SIGMA_Y),
+                _vib_sigma(T, *_VIB_SIGMA_Z),
+            ], dim=2)  # (num_envs, 4, 3)
+            vib = torch.randn(self.scene.num_envs, 4, 3, device=self.device, generator=self.vib_rngen) * sig
+            self.drone.thrust_noise = self.noise_scale * vib
+            self.drone.moment_noise = self.noise_scale * vib * 0.09
+
             self.scene.articulations["drone"].set_external_force_and_torque(
                 self.drone.controller.ve_thrust + self.drone.thrust_noise,
                 self.drone.controller.ve_moment + self.drone.moment_noise,
@@ -377,7 +388,7 @@ class DroneEnv(DirectRLEnv):
     def _get_dones(self):
         drone = self.scene.articulations["drone"]
         angle = torch.acos((-drone.data.projected_gravity_b[:, 2]).clamp(-1.0, 1.0))
-        died = angle > torch.deg2rad(torch.tensor(160.0, device=angle.device))
+        died = angle > torch.deg2rad(torch.tensor(60.0, device=angle.device))
         time_out = self.episode_length_buf >= self.max_episode_length
         return died, time_out
 
@@ -387,7 +398,7 @@ class DroneEnv(DirectRLEnv):
 
         self.noise_scale[env_ids] = torch.empty(
             len(env_ids), 1, 1, device=self.device
-        ).uniform_(1.0, 1.1, generator=self.rngen)
+        ).uniform_(5e-1, 1.5, generator=self.rngen)
 
         if self.sitl:
             env_list = env_ids.cpu().tolist()

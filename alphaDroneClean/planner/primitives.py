@@ -35,7 +35,7 @@ class HoldPosition(Action):
 
 class RandomWalk(Action):
 
-    def __init__(self, num_envs, dim, device, vel_scale=0.2):
+    def __init__(self, num_envs, dim, device, vel_scale=0.4):
         super().__init__(num_envs, dim, device)
         self.vel_scale = vel_scale
         self.p0 = torch.zeros(num_envs, dim, device=device)
@@ -87,7 +87,7 @@ class CubicSpline(Action):
 
 class RandomSphereOffset(Action):
 
-    def __init__(self, num_envs, dim, device, min_radius=0.05, max_radius=0.2):
+    def __init__(self, num_envs, dim, device, min_radius=0.05, max_radius=0.4):
         super().__init__(num_envs, dim, device)
         self.min_radius = min_radius
         self.max_radius = max_radius
@@ -109,7 +109,7 @@ class CircularOrbit(Action):
     """Horizontal circle centred at start_pos. Produces sustained centripetal acceleration."""
 
     def __init__(self, num_envs, dim, device, min_radius=0.05, max_radius=0.3,
-                 min_laps=0.2, max_laps=1.0):
+                 min_laps=0.05, max_laps=0.5):
         super().__init__(num_envs, dim, device)
         self.min_radius = min_radius
         self.max_radius = max_radius
@@ -270,7 +270,7 @@ class ActionPrimitive:
     device: str = "cuda"
     min_duration: int = 50
     max_duration: int = 200
-    min_xyz: tuple = (-2.5, -2.5, 0.2)
+    min_xyz: tuple = (-2.5, -2.5, 0.5)
     max_xyz: tuple = (2.5, 2.5, 2.5)
     recenter: float = 0.15  # partial pull of the re-anchor point toward box center per switch
 

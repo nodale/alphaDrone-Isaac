@@ -28,7 +28,7 @@ from sitl.mavlink import QuickMavMulti
 _SEED_MULT = 2
 # Vibration model: quadratic sigma(T) = d·T² + e·T + f, clamped to floor [g]
 # Parameters fitted from thrust_log.csv via thesis_tools/vibration_model.py
-_VIB_T_MAX = 13.0  # N — model extrapolation limit
+_VIB_T_MAX = 12.5  # N — model extrapolation limit
 _VIB_SIGMA_X = (-0.01168,  0.11088, -0.02476, 0.01638)  # (d, e, f, floor)
 _VIB_SIGMA_Y = (-0.00363,  0.03557,  0.03776, 0.02099)
 _VIB_SIGMA_Z = ( 0.00052,  0.00402,  0.04676, 0.01606)
@@ -225,9 +225,9 @@ class DroneEnv(DirectRLEnv):
                 # actuate_motors(): signal = 0.8238*T_kgf^0.5788 + 0.0360, i.e. the
                 # command is NOT linear in thrust. Applying the forward curve here
                 # reproduces the thrust the controller intended (in Newtons).
-                #thrust_kgf = ((actuation_t - 0.03604325541483971) / 0.823789589308134).clamp(min=0.0) ** (1.0 / 0.578815510492838)
-                #self.sitl_actuation[..., 2] = thrust_kgf * 9.81
-                self.sitl_actuation[..., 2] = actuation_t * 13.0
+                thrust_kgf = ((actuation_t - 0.03604325541483971) / 0.823789589308134).clamp(min=0.0) ** (1.0 / 0.578815510492838)
+                self.sitl_actuation[..., 2] = thrust_kgf * 9.81
+                #self.sitl_actuation[..., 2] = actuation_t * 13.0
                 self.sitl_moment[..., 2] = self.sitl_actuation[..., 2] * 0.09
                 # rotors 1 and 3 counter-rotate (same convention as Kxontroller)
                 self.sitl_moment[:, 0, 2] *= -1.0

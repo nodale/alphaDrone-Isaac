@@ -221,18 +221,9 @@ class DroneEnv(DirectRLEnv):
 
                 actuation = self.mav.recvActuation()
                 actuation_t = torch.tensor(actuation, device=self.device)
-                # Invert the motor-command mapping applied by mc_johnny_control's
-                # actuate_motors(): signal = 0.16827*sqrt(T_N) + 0.02795*T_N + 0.08697
-                # (quick_v11a bench fit in Newtons, R^2=0.99298). Quadratic in
-                # sqrt(T_N); take the positive root and square to recover T_N.
-                _pwm_a, _pwm_b, _pwm_c0 = 0.02795, 0.16827, 0.08697
-                _pwm_disc = (_pwm_b ** 2 - 4.0 * _pwm_a * _pwm_c0) + 4.0 * _pwm_a * actuation_t
-                _pwm_sqrt_t = ((-_pwm_b + torch.sqrt(_pwm_disc.clamp(min=0.0))) / (2.0 * _pwm_a)).clamp(min=0.0)
-                self.sitl_actuation[..., 2] = _pwm_sqrt_t ** 2
-                # Reaction-torque-per-thrust (km): matches Kalculator/config.yaml's
-                # `torque: 0.0223` (quick_v11a bench km), which is what the
-                # linearized A/B/K actually used - NOT the old placeholder 0.09.
-                self.sitl_moment[..., 2] = self.sitl_actuation[..., 2] * 0.0223
+                # quick_v11a's T_n -> thrust_kg curve (thrust_curves.md), converted to N
+                self.sitl_actuation[..., 2] = (0.96205 * actuation_t ** 2 + 0.35267 * actuation_t - 0.06114) * 9.81
+                self.sitl_moment[..., 2] = self.sitl_actuation[..., 2] * 0.021867
                 # rotors 1 and 3 counter-rotate (same convention as Kxontroller)
                 self.sitl_moment[:, 0, 2] *= -1.0
                 self.sitl_moment[:, 2, 2] *= -1.0
@@ -352,7 +343,7 @@ class DroneEnv(DirectRLEnv):
             ], dim=2)  # (num_envs, 4, 3)
             vib = torch.randn(self.scene.num_envs, 4, 3, device=self.device, generator=self.vib_rngen) * sig
             self.drone.thrust_noise = self.noise_scale * vib * 0.0
-            self.drone.moment_noise = self.noise_scale * vib * 0.0223 * 0.0
+            self.drone.moment_noise = self.noise_scale * vib * 0.021867 * 0.0
 
             self.scene.articulations["drone"].set_external_force_and_torque(
                 self.sitl_actuation[self.arm_env_ids] + self.drone.thrust_noise[self.arm_env_ids],
@@ -369,7 +360,7 @@ class DroneEnv(DirectRLEnv):
             ], dim=2)  # (num_envs, 4, 3)
             vib = torch.randn(self.scene.num_envs, 4, 3, device=self.device, generator=self.vib_rngen) * sig
             self.drone.thrust_noise = self.noise_scale * vib
-            self.drone.moment_noise = self.noise_scale * vib * 0.0223
+            self.drone.moment_noise = self.noise_scale * vib * 0.021867
 
             self.scene.articulations["drone"].set_external_force_and_torque(
                 self.drone.controller.ve_thrust + self.drone.thrust_noise,

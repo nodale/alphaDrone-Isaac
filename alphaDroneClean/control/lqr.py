@@ -84,7 +84,7 @@ class Kxontroller:
         self.P_LQR = torch.tensor(params["P_LQR"], dtype=torch.float32, device=device)
 
         self.u_eq = torch.tensor(
-            [9.37, 9.47, 8.89, 8.79],
+            [9.4004325, 9.4004325, 9.4004325, 9.4004325],
             dtype=torch.float32,
             device=device,
         )
@@ -118,6 +118,6 @@ class Kxontroller:
         self.ve_thrust[:, :, 2] = self.thrust.detach().clone()
 
         self.ve_moment.zero_()
-        self.ve_moment[:, :, 2] = self.thrust.detach().clone() * 0.09
+        self.ve_moment[:, :, 2] = self.thrust.detach().clone() * 0.0223
         self.ve_moment[:, 0, 2] *= -1.0
         self.ve_moment[:, 2, 2] *= -1.0
